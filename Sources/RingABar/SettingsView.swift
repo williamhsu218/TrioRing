@@ -50,6 +50,7 @@ struct SettingsView: View {
     let globalShortcut: GlobalShortcutController
     let onRecordShortcut: () -> Void
     let onCancelShortcut: () -> Void
+    var automaticallyChecksForUpdates: Binding<Bool>? = nil
     @State private var previewIsDark = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -210,7 +211,8 @@ struct SettingsView: View {
         case .panel: panelSettings
         case .general: GeneralSettingsPane(globalShortcut: globalShortcut,
                                            onRecordShortcut: onRecordShortcut,
-                                           onCancelShortcut: onCancelShortcut)
+                                           onCancelShortcut: onCancelShortcut,
+                                           automaticallyChecksForUpdates: automaticallyChecksForUpdates)
         }
     }
 

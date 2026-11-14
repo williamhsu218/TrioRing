@@ -16,11 +16,13 @@
 
 需要 Apple Silicon Mac 和 macOS 26 或更新版本。界面提供简体中文和英文。
 
-**[下载 TrioRing 0.7.35（DMG）](https://github.com/williamhsu218/TrioRing/releases/download/v0.7.35/TrioRing-0.7.35-arm64.dmg)**
+**[下载 TrioRing 0.7.36（DMG）](https://github.com/williamhsu218/TrioRing/releases/download/v0.7.36/TrioRing-0.7.36-arm64.dmg)**
 
 这个预览包用 **Apple Development** 签名，**未经过 Apple 公证**。打开 DMG 后，把 TrioRing 拖进「应用程序」。macOS 可能会阻止首次启动。
 
 从 0.7.35 开始，右键菜单栏图标，或在面板底部点「…」，选择「检查更新…」。Sparkle 会从 GitHub 下载并验证更新，确认后安装。0.7.34 和更早版本需要先手动装一次。
+
+想让 TrioRing 主动提醒，可以在「设置 → 通用 → 更新」打开「自动检查更新」。开关默认关闭。开启后，Sparkle 会定期检查 GitHub，发现新版时菜单栏图标会亮起蓝点。安装仍由你确认。
 
 ### 从源码构建
 
@@ -37,7 +39,7 @@ cd TrioRing
 - 附近 Wi‑Fi 扫描需要定位授权。切换电量模式需要在 macOS 批准一次后台助手，助手还需要与 App 一起签名。
 - 功耗读数、充电控制和 AirPods 聆听模式取决于硬件与系统版本。TrioRing 检测到 AlDente 正在运行时会暂停写入充电设置。
 
-[下载 0.7.35 源码](https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.35) · [版本记录](https://github.com/williamhsu218/TrioRing/releases)
+[下载 0.7.36 源码](https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.36) · [版本记录](https://github.com/williamhsu218/TrioRing/releases)
 
 ## 开发
 
@@ -53,7 +55,7 @@ TRIORING_RENDER_UI=1 swift test --filter PanelUXRenderTests
 用与上一版相同的 Apple 签名身份构建 App，再运行 `./script/package.sh`。DMG 上传到对应版本的 GitHub Release 后，生成并提交更新源。
 
 ```bash
-./script/make_appcast.sh /path/to/Sparkle/bin dist/TrioRing-0.7.35-arm64.dmg > dist/appcast.xml \
+./script/make_appcast.sh /path/to/Sparkle/bin dist/TrioRing-0.7.36-arm64.dmg > dist/appcast.xml \
   && mv dist/appcast.xml updates/appcast.xml
 ```
 

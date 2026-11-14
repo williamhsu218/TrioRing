@@ -18,7 +18,7 @@ struct TrioRingApp {
 }
 
 @MainActor
-private final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
+private final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, @preconcurrency SPUStandardUserDriverDelegate {
     private let store = StatusStore()
     private let preferences = Preferences()
     private let batteryActions = BatteryActions()
@@ -42,7 +42,8 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     private var settingsWindow: NSWindowController?
     private var powerObserver: NSObjectProtocol?
     private var hostingController: NSHostingController<StatusPanel>?
-    private let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+    private lazy var updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: self)
+    private let updateBadge = StatusIconAccentView()
 
     private var recordingMonitor: Any?
     private var pressedRecordingModifiers = false
@@ -63,7 +64,6 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        updater.startUpdater()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = "TrioRing"
         if let button = item.button {
@@ -85,8 +85,21 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
                 accentView.centerXAnchor.constraint(equalTo: button.centerXAnchor),
                 accentView.centerYAnchor.constraint(equalTo: button.centerYAnchor)
             ])
+            updateBadge.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+            updateBadge.contentTintColor = .systemBlue
+            updateBadge.isHidden = true
+            updateBadge.setAccessibilityElement(false)
+            updateBadge.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(updateBadge)
+            NSLayoutConstraint.activate([
+                updateBadge.widthAnchor.constraint(equalToConstant: 6),
+                updateBadge.heightAnchor.constraint(equalToConstant: 6),
+                updateBadge.centerXAnchor.constraint(equalTo: accentView.trailingAnchor),
+                updateBadge.centerYAnchor.constraint(equalTo: accentView.topAnchor, constant: 3)
+            ])
         }
         self.item = item
+        updater.startUpdater()
         preferences.onIconChange = { [weak self] in
             guard let self else { return }
             if self.iconTelemetrySource != self.preferences.icon.middleSource {
@@ -335,6 +348,31 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         updater.checkForUpdates(nil)
     }
 
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState
+    ) {
+        guard !state.userInitiated else { return }
+        updateBadge.isHidden = false
+        item?.button?.setAccessibilityHelp(String(localized: "A TrioRing update is available."))
+        item?.button?.toolTip = String(localized: "A TrioRing update is available.")
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        clearUpdateBadge()
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        clearUpdateBadge()
+    }
+
+    private func clearUpdateBadge() {
+        updateBadge.isHidden = true
+        item?.button?.setAccessibilityHelp(nil)
+        item?.button?.toolTip = nil
+    }
+
     private func showSettings(_ section: SettingsCategory? = nil) {
         closePanel()
         if let section {
@@ -349,7 +387,11 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
                 preferences: preferences, store: store, audio: audio,
                 batteryActions: batteryActions, wifiAccess: wifiAccess, globalShortcut: globalShortcut,
                 onRecordShortcut: { [weak self] in self?.beginShortcutRecording() },
-                onCancelShortcut: { [weak self] in self?.cancelShortcutRecording() }
+                onCancelShortcut: { [weak self] in self?.cancelShortcutRecording() },
+                automaticallyChecksForUpdates: Binding(
+                    get: { [updater] in updater.updater.automaticallyChecksForUpdates },
+                    set: { [updater] in updater.updater.automaticallyChecksForUpdates = $0 }
+                )
             ))
             let window = NSWindow(contentViewController: hosting)
             window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
