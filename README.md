@@ -14,7 +14,15 @@
 
 ## 在 Mac 上试试
 
-需要 Apple Silicon Mac、macOS 26 或更新版本，以及带有 macOS 26 SDK 的 Xcode 工具链。界面提供简体中文和英文。
+需要 Apple Silicon Mac 和 macOS 26 或更新版本。界面提供简体中文和英文。
+
+**[下载 TrioRing 0.7.34（DMG）](https://github.com/williamhsu218/TrioRing/releases/download/v0.7.34/TrioRing-0.7.34-arm64.dmg)**
+
+这个预览包用 **Apple Development** 签名，**未经过 Apple 公证**。打开 DMG 后，把 TrioRing 拖进「应用程序」。macOS 可能会阻止首次启动。
+
+### 从源码构建
+
+需要带有 macOS 26 或更新 SDK 的 Xcode 工具链。
 
 ```bash
 git clone https://github.com/williamhsu218/TrioRing.git
