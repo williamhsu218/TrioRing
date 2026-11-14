@@ -1,0 +1,45 @@
+# TrioRing
+
+**电量、网络、声音，一个菜单栏图标。**
+
+我做 TrioRing，是想少开几次「系统设置」。插着电的时候，抬眼就知道 Mac 是在充电，还是已经停在我设的上限。耳机接上了，点一下就能看现在从哪儿出声。要看细节，再往里点一层。
+
+<img src="docs/images/battery-dark.png" width="285" alt="深色模式的电池详情，显示功率流和充电管理"> <img src="docs/images/audio-light.png" width="285" alt="浅色模式的音频详情，带全宽输入和输出切换控件">
+
+- **电池** · 充电暂停会明写。支持的 Mac 能看功率流、电池健康和 USB‑C 端口功耗，也能调整充电上限或临时充满。
+- **网络** · 看当前 Wi‑Fi、IP、VPN 和系统代理。授权定位后可以扫描附近网络，从紧凑列表里选；企业网络交给 macOS 设置。
+- **声音** · 首页就能调音量、静音和切输出。支持的 AirPods 还能看分耳和充电盒电量，点图标切换降噪、通透或自适应。
+
+首页和详情共用系统 Liquid Glass，跟随 macOS 深浅色和「减少透明度」。菜单栏图标和状态面板都可以自己排。点击菜单栏图标就能开始，`⌘,` 打开设置。
+
+## 在 Mac 上试试
+
+需要 Apple Silicon Mac、macOS 26 或更新版本，以及带有 macOS 26 SDK 的 Xcode 工具链。界面提供简体中文和英文。
+
+```bash
+git clone https://github.com/williamhsu218/TrioRing.git
+cd TrioRing
+./script/build_and_run.sh
+```
+
+脚本会构建并打开 `dist/TrioRing.app`。想放到「应用程序」里，可以运行 `./script/install.sh`。第一次启动后，到菜单栏找 TrioRing。
+
+- 附近 Wi‑Fi 扫描需要定位授权。切换电量模式需要在 macOS 批准一次后台助手，助手还需要与 App 一起签名。
+- 功耗读数、充电控制和 AirPods 聆听模式取决于硬件与系统版本。TrioRing 检测到 AlDente 正在运行时会暂停写入充电设置。
+
+[版本记录](https://github.com/williamhsu218/TrioRing/releases)
+
+## 开发
+
+用 SwiftUI 做面板和设置，用 AppKit 管菜单栏、窗口定位和材质。项目没有第三方 Swift 包依赖。
+
+```bash
+swift test
+TRIORING_RENDER_UI=1 swift test --filter PanelUXRenderTests
+```
+
+## 致谢
+
+菜单栏图标几何、部分设置布局、功率流图和电源读数借鉴并改编自 lingyired 的 [Status Trio v1.9.5](https://github.com/lingyired/status-trio/tree/v1.9.5)。感谢原作者把这些细节公开。
+
+仓库为公开源码。Status Trio 的改编部分保留原作者署名及 Apache-2.0 许可。TrioRing 新增代码目前未声明统一的再分发许可。 [第三方许可](Resources/ThirdParty/StatusTrio/LICENSE) · [署名](Resources/ThirdParty/StatusTrio/NOTICE)

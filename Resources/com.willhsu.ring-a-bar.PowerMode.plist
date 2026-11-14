@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.willhsu.ring-a-bar.PowerMode</string>
+  <key>BundleProgram</key>
+  <string>Contents/Helpers/TrioRingPowerHelper</string>
+  <key>MachServices</key>
+  <dict>
+    <key>com.willhsu.ring-a-bar.PowerMode</key>
+    <true/>
+  </dict>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>com.willhsu.ring-a-bar</string>
+  </array>
+  <key>ThrottleInterval</key>
+  <integer>1</integer>
+</dict>
+</plist>

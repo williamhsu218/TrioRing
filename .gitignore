@@ -1,0 +1,8 @@
+.build/
+dist/
+.DS_Store
+/.superpowers/
+/github-mcp-bundle/
+/docs/LOCAL_DEVELOPMENT.md
+/docs/STATUS_TRIO_PARITY.md
+/docs/verification/
