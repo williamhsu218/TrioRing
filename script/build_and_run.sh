@@ -44,6 +44,15 @@ cp "$BUILD_DIR/$APP_NAME" "$STAGED_APP/Contents/MacOS/$APP_NAME"
 cp Resources/Info.plist "$STAGED_APP/Contents/Info.plist"
 cp -R Resources/zh-Hans.lproj "$STAGED_APP/Contents/Resources/"
 cp -R Resources/ThirdParty "$STAGED_APP/Contents/Resources/"
+mkdir -p "$STAGED_APP/Contents/Frameworks"
+SPARKLE_FRAMEWORK="$STAGED_APP/Contents/Frameworks/Sparkle.framework"
+ditto "$BUILD_DIR/Sparkle.framework" "$SPARKLE_FRAMEWORK"
+# SwiftPM links against a framework copied to the build products directory.
+# The embedded copy must be the only non-system runtime search path.
+while IFS= read -r path; do
+  [[ "$path" == '@executable_path/../Frameworks' ]] && continue
+  install_name_tool -delete_rpath "$path" "$STAGED_APP/Contents/MacOS/$APP_NAME"
+done < <(otool -l "$STAGED_APP/Contents/MacOS/$APP_NAME" | awk '/cmd LC_RPATH/ { found=1; next } found && $1=="path" { print $2; found=0 }')
 xcrun swiftc Sources/RingABar/StatusIconGeometry.swift script/make_icon.swift -o "$STAGING_DIR/make-icon"
 "$STAGING_DIR/make-icon" "$STAGING_DIR/AppIcon.iconset"
 iconutil -c icns "$STAGING_DIR/AppIcon.iconset" -o "$STAGED_APP/Contents/Resources/AppIcon.icns"
@@ -75,6 +84,18 @@ cat <<EOF > "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app/Conten
 EOF
 cp "Resources/$BUNDLE_ID.PowerMode.plist" "$STAGED_APP/Contents/Library/LaunchDaemons/"
 plutil -lint "$STAGED_APP/Contents/Library/LaunchDaemons/$BUNDLE_ID.PowerMode.plist" >/dev/null
+
+SPARKLE_VERSION="$SPARKLE_FRAMEWORK/Versions/Current"
+SPARKLE_SIGN_FLAGS=(--force --sign "$SIGN_IDENTITY" --options runtime)
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  SPARKLE_SIGN_FLAGS+=("$TIMESTAMP_FLAG")
+fi
+for service in "$SPARKLE_VERSION"/XPCServices/*.xpc; do
+  codesign "${SPARKLE_SIGN_FLAGS[@]}" --preserve-metadata=entitlements "$service"
+done
+codesign "${SPARKLE_SIGN_FLAGS[@]}" "$SPARKLE_VERSION/Autoupdate"
+codesign "${SPARKLE_SIGN_FLAGS[@]}" "$SPARKLE_VERSION/Updater.app"
+codesign "${SPARKLE_SIGN_FLAGS[@]}" "$SPARKLE_FRAMEWORK"
 
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.PowerMode" --options runtime "$TIMESTAMP_FLAG" \

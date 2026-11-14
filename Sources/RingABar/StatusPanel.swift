@@ -141,6 +141,7 @@ struct StatusPanel: View {
     let onNetworkSettings: () -> Void
     let onAudioSettings: () -> Void
     let onAbout: () -> Void
+    var onCheckForUpdates: (() -> Void)? = nil
     let onHeight: (PanelLayout, UInt64, CGFloat, Bool) -> Void
     let onQuit: () -> Void
     let onSystemSettings: (SystemSettingsPane) -> Void
@@ -695,6 +696,10 @@ struct StatusPanel: View {
             Spacer(minLength: 0)
             Menu {
                 Button("About TrioRing", action: onAbout)
+                if let onCheckForUpdates {
+                    Button("Check for Updates…", action: onCheckForUpdates)
+                        .accessibilityIdentifier("RingABar.checkForUpdates")
+                }
                 Button("Open Menu Bar Settings") { onSystemSettings(.menuBar) }
                 Divider()
                 Button("Quit TrioRing", action: onQuit)

@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 import OSLog
+import Sparkle
 import SwiftUI
 
 @main
@@ -41,6 +42,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     private var settingsWindow: NSWindowController?
     private var powerObserver: NSObjectProtocol?
     private var hostingController: NSHostingController<StatusPanel>?
+    private let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
 
     private var recordingMonitor: Any?
     private var pressedRecordingModifiers = false
@@ -61,6 +63,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        updater.startUpdater()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = "TrioRing"
         if let button = item.button {
@@ -119,6 +122,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
                 NSApp.orderFrontStandardAboutPanel(nil)
                 NSApp.activate()
             },
+            onCheckForUpdates: { [weak self] in self?.checkForUpdates() },
             onHeight: { [weak self] layout, presentation, height, ready in
                 self?.requestPanelFit(layout: layout, presentation: presentation, height: height, ready: ready)
             },
@@ -309,6 +313,11 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         let settings = menu.addItem(withTitle: String(localized: "Settings…"),
                                     action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
+        let updates = menu.addItem(withTitle: String(localized: "Check for Updates…"),
+                                   action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = self
+        updates.isEnabled = updater.updater.canCheckForUpdates
+        menu.autoenablesItems = false
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: String(localized: "Quit TrioRing"), action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
@@ -318,6 +327,13 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     }
 
     @objc private func openSettings() { showSettings() }
+
+    @objc private func checkForUpdates() {
+        guard updater.updater.canCheckForUpdates else { return }
+        closePanel()
+        NSApp.activate()
+        updater.checkForUpdates(nil)
+    }
 
     private func showSettings(_ section: SettingsCategory? = nil) {
         closePanel()

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>TrioRing Updates</title>
+    <link>https://github.com/williamhsu218/TrioRing/releases</link>
+    <description>Updates for TrioRing on macOS.</description>
+    <item>
+      <title>TrioRing 0.7.35</title>
+      <link>https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.35</link>
+      <description>See the GitHub release for what's new.</description>
+      <pubDate>Sat, 14 Nov 2026 09:41:32 +0000</pubDate>
+      <sparkle:version>47</sparkle:version>
+      <sparkle:shortVersionString>0.7.35</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/williamhsu218/TrioRing/releases/download/v0.7.35/TrioRing-0.7.35-arm64.dmg" length="3228780" type="application/octet-stream" sparkle:edSignature="+C0+XcE5KRseVmbldPkzwfa4HYCes+cvc/RalYLMadnWhEEvh2CSkXx6j3km5Y6edKg3I0vGKVCNWkH43XFEDQ=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: UdgY0n5/eVsRkRo9iIEGuImNMzOKZ2rx/qZv5EDATTosL87IrphYWSaFx7BL5159sVn64wKgYuJIM1k18ZAWDg==
+length: 1323
+-->

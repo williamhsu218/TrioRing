@@ -9,11 +9,18 @@ let package = Package(
         .executable(name: "TrioRingPowerHelper", targets: ["TrioRingPowerHelper"]),
         .executable(name: "TrioRingLauncher", targets: ["Launcher"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1")
+    ],
     targets: [
         .target(name: "PowerUIBridge", cSettings: [.unsafeFlags(["-fobjc-arc"])]),
         .target(name: "PowerModeServiceProtocol"),
         .executableTarget(name: "TrioRingPowerHelper", dependencies: ["PowerModeServiceProtocol"]),
-        .executableTarget(name: "RingABar", dependencies: ["PowerUIBridge", "PowerModeServiceProtocol"]),
+        .executableTarget(
+            name: "RingABar",
+            dependencies: ["PowerUIBridge", "PowerModeServiceProtocol", .product(name: "Sparkle", package: "Sparkle")],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
+        ),
         .executableTarget(name: "Launcher"),
         .testTarget(name: "RingABarTests", dependencies: ["RingABar"])
     ]
