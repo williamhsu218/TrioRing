@@ -27,7 +27,7 @@ cd TrioRing
 - 附近 Wi‑Fi 扫描需要定位授权。切换电量模式需要在 macOS 批准一次后台助手，助手还需要与 App 一起签名。
 - 功耗读数、充电控制和 AirPods 聆听模式取决于硬件与系统版本。TrioRing 检测到 AlDente 正在运行时会暂停写入充电设置。
 
-[版本记录](https://github.com/williamhsu218/TrioRing/releases)
+[下载 0.7.34 源码](https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.34) · [版本记录](https://github.com/williamhsu218/TrioRing/releases)
 
 ## 开发
 
@@ -38,8 +38,6 @@ swift test
 TRIORING_RENDER_UI=1 swift test --filter PanelUXRenderTests
 ```
 
-## 致谢
+## 许可
 
-菜单栏图标几何、部分设置布局、功率流图和电源读数借鉴并改编自 lingyired 的 [Status Trio v1.9.5](https://github.com/lingyired/status-trio/tree/v1.9.5)。感谢原作者把这些细节公开。
-
-仓库为公开源码。Status Trio 的改编部分保留原作者署名及 Apache-2.0 许可。TrioRing 新增代码目前未声明统一的再分发许可。 [第三方许可](Resources/ThirdParty/StatusTrio/LICENSE) · [署名](Resources/ThirdParty/StatusTrio/NOTICE)
+第三方代码的许可和署名随源码提供。TrioRing 新增代码目前未声明统一的再分发许可。 [第三方许可与署名](Resources/ThirdParty)

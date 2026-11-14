@@ -12,6 +12,12 @@ cd "$PROJECT_DIR"
 APP_NAME="TrioRing"
 BUNDLE_ID="com.willhsu.ring-a-bar"
 SIGN_IDENTITY="${TRIORING_SIGN_IDENTITY:--}"
+SIGN_TIMESTAMP="${TRIORING_SIGN_TIMESTAMP:-none}"
+case "$SIGN_TIMESTAMP" in
+  none) TIMESTAMP_FLAG="--timestamp=none" ;;
+  secure) TIMESTAMP_FLAG="--timestamp" ;;
+  *) echo "TRIORING_SIGN_TIMESTAMP must be 'none' or 'secure'." >&2; exit 2 ;;
+esac
 DIST_DIR="$PROJECT_DIR/dist"
 mkdir -p "$DIST_DIR"
 
@@ -71,11 +77,11 @@ cp "Resources/$BUNDLE_ID.PowerMode.plist" "$STAGED_APP/Contents/Library/LaunchDa
 plutil -lint "$STAGED_APP/Contents/Library/LaunchDaemons/$BUNDLE_ID.PowerMode.plist" >/dev/null
 
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
-  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.PowerMode" --options runtime --timestamp=none \
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.PowerMode" --options runtime "$TIMESTAMP_FLAG" \
     "$STAGED_APP/Contents/Helpers/TrioRingPowerHelper"
-  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.Launcher" --options runtime --timestamp=none \
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.Launcher" --options runtime "$TIMESTAMP_FLAG" \
     "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app"
-  codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp=none \
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$TIMESTAMP_FLAG" \
     --entitlements Resources/TrioRing.entitlements "$STAGED_APP"
 else
   codesign --force --sign - --options runtime \
