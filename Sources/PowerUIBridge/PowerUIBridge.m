@@ -1,7 +1,33 @@
 // Runtime checks and PowerUI selectors adapted from Status Trio v1.9.5 (Apache-2.0).
 #import "PowerUIBridge.h"
 #import <dlfcn.h>
+#import <notify.h>
 #import <objc/runtime.h>
+
+// Powerd publishes its own battery-gauging override independently of the
+// temporary charge-limit override exposed by PowerUI.
+static const char *calibrationNotification = "com.apple.system.powersources.chargingtofulloverride";
+
+TRSystemCalibration TRReadSystemCalibration(void) {
+    int token;
+    if (notify_register_check(calibrationNotification, &token) != NOTIFY_STATUS_OK) return TRSystemCalibrationUnknown;
+    uint64_t state;
+    uint32_t result = notify_get_state(token, &state);
+    notify_cancel(token);
+    if (result != NOTIFY_STATUS_OK || state > 1) return TRSystemCalibrationUnknown;
+    return state == 1 ? TRSystemCalibrationActive : TRSystemCalibrationInactive;
+}
+
+int TRObserveSystemCalibration(void (^handler)(void)) {
+    int token;
+    return notify_register_dispatch(calibrationNotification, &token, dispatch_get_main_queue(), ^(int received) {
+        handler();
+    }) == NOTIFY_STATUS_OK ? token : -1;
+}
+
+void TRStopObservingSystemCalibration(int token) {
+    if (token >= 0) notify_cancel(token);
+}
 
 @protocol TRPowerUIClient
 - (instancetype)initWithClientName:(NSString *)name;
@@ -12,7 +38,6 @@
      chargingOverrideAllowed:(BOOL *)allowed withError:(NSError **)error;
 - (BOOL)temporarilyDisableMCL:(NSError **)error;
 - (BOOL)temporarilyEnableCharging:(NSError **)error;
-- (BOOL)enableMCL:(NSError **)error;
 - (NSArray<NSNumber *> *)availableChargeLimitsWithError:(NSError **)error;
 - (BOOL)setMCLLimit:(unsigned char)limit error:(NSError **)error;
 @end
@@ -103,11 +128,13 @@ BOOL TRRequestFullCharge(NSInteger expectedLimit, BOOL allowOptimizedPause) {
         NSError *error = nil;
         NSArray *signature = @[@(@encode(NSError *__autoreleasing *))];
         if (expectedLimit >= 80 && expectedLimit < 100 && state.mode == 1 && state.limit == expectedLimit) {
-            if (!matches(object_getClass(client), @selector(temporarilyDisableMCL:), @encode(BOOL), signature)) return NO;
+            if (!matches(object_getClass(client), @selector(temporarilyDisableMCL:), @encode(BOOL), signature) ||
+                TRReadSystemCalibration() == TRSystemCalibrationActive) return NO;
             return [client temporarilyDisableMCL:&error] && !error;
         }
         if (expectedLimit == 0 && allowOptimizedPause && state.canResume && !(state.mode == 1 && state.limit < 100)) {
-            if (!matches(object_getClass(client), @selector(temporarilyEnableCharging:), @encode(BOOL), signature)) return NO;
+            if (!matches(object_getClass(client), @selector(temporarilyEnableCharging:), @encode(BOOL), signature) ||
+                TRReadSystemCalibration() == TRSystemCalibrationActive) return NO;
             return [client temporarilyEnableCharging:&error] && !error;
         }
         return NO;
@@ -118,12 +145,14 @@ BOOL TRRestoreChargeLimit(NSInteger expectedLimit) {
     @try {
         id<TRPowerUIClient> client = makeClient();
         TRChargeState state = readState(client);
-        // Only end a live system override; never write a new charge percentage.
+        // A temporary bypass can report 100% and enableMCL: can select the
+        // system default. Set the saved target directly to end the bypass.
         if (!state.valid || state.mode != 3 || expectedLimit < 80 || expectedLimit >= 100 ||
-            (state.limit >= 80 && state.limit < 100 && state.limit != expectedLimit)) return NO;
-        if (!matches(object_getClass(client), @selector(enableMCL:), @encode(BOOL), @[@(@encode(NSError *__autoreleasing *))])) return NO;
+            (state.limit >= 80 && state.limit < 100 && state.limit != expectedLimit) ||
+            !(allowedLimits(client) & (1u << (expectedLimit - 80)))) return NO;
+        if (TRReadSystemCalibration() == TRSystemCalibrationActive) return NO;
         NSError *error = nil;
-        return [client enableMCL:&error] && !error;
+        return [client setMCLLimit:(unsigned char)expectedLimit error:&error] && !error;
     } @catch (NSException *exception) { return NO; }
 }
 
@@ -135,6 +164,7 @@ BOOL TRSetChargeLimit(NSInteger limit, NSInteger expectedLimit) {
         if (!before.valid || before.mode == 3 || before.limit != expectedLimit ||
             !(allowedLimits(client) & (1u << (limit - 80)))) return NO;
         if (limit == before.limit) return YES;
+        if (TRReadSystemCalibration() == TRSystemCalibrationActive) return NO;
         NSError *error = nil;
         return [client setMCLLimit:(unsigned char)limit error:&error] && !error;
     } @catch (NSException *exception) { return NO; }

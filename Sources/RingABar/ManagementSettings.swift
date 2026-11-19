@@ -37,6 +37,12 @@ struct BatterySettingsPane: View {
                                subtitle: "Show the macOS action to temporarily charge past an eligible limit or pause.",
                                symbol: "bolt.badge.clock.fill", tint: .green,
                                isOn: $preferences.showsChargeAction, id: "RingABar.settings.showChargeAction")
+                if actions.showsCalibrationStatus {
+                    SettingsRule()
+                    BatteryCalibrationRow(status: actions.calibration.status)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                }
                 if let reading = store.battery.reading, !actions.availableChargeLimits.isEmpty {
                     SettingsRule()
                     ChargeLimitControls(actions: actions, reading: reading)

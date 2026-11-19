@@ -356,12 +356,15 @@ struct BatteryPage: View {
             ? actions.temporarilyOverriddenLimit ?? battery.chargeLimit : nil
         let fullCharge = FullChargeRow(actions: actions, reading: battery, showUnavailable: true,
                                        onSystemSettings: onOpenSettings)
-        if showsLimitControls || fallbackLimit.map({ $0 < 100 }) == true || fullCharge.hasContent {
+        if actions.showsCalibrationStatus || showsLimitControls || fallbackLimit.map({ $0 < 100 }) == true || fullCharge.hasContent {
             VStack(alignment: .leading, spacing: 7) {
                 Text("Charging Management")
                     .font(.caption.weight(.semibold))
                     .panelSecondaryText()
                     .accessibilityAddTraits(.isHeader)
+                if actions.showsCalibrationStatus {
+                    BatteryCalibrationRow(status: actions.calibration.status)
+                }
                 if let limit = fallbackLimit, limit < 100 {
                     DetailValue(label: actions.temporarilyOverriddenLimit == nil ? "Charge limit" : "Charge limit (temporarily bypassed)",
                                 value: (Double(limit) / 100).formatted(.percent))

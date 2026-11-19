@@ -66,18 +66,36 @@ struct PowerModeState: Equatable, Sendable {
 @MainActor @Observable
 final class BatteryActions {
     let powerAuthorization = PowerModeAuthorization()
-    private(set) var charge: TRChargeState?
+    private var chargingSnapshot: NativeChargingSnapshot?
+    private var charge: TRChargeState? { chargingSnapshot?.charge }
     private(set) var modes: PowerModeState?
     private(set) var chargeBusy = false
     private(set) var modeBusy = false
     private(set) var chargeError: LocalizedStringKey?
     private(set) var modeError: LocalizedStringKey?
-    private var requestedAt: Date?
-    private var restoreLimit: Int?
-    private var observedOverride = false
+    private var optimizedChargeRequestedAt: Date?
     private var chargeWriteRevision = 0
+    private var chargeReadRevision = 0
+    private var appliedChargeReadRevision = 0
+    @ObservationIgnored private var calibrationObservationToken: Int32 = -1
     private let defaults: UserDefaults
     private static let pauseKey = "battery.nativeChargePause"
+    private static let calibrationKey = "battery.systemCalibration"
+    private static let manualFullChargeKey = "battery.manualFullCharge"
+
+    private(set) var calibration: BatteryCalibration {
+        didSet {
+            guard calibration.session != oldValue.session else { return }
+            defaults.set(calibration.session.flatMap { try? JSONEncoder().encode($0) }, forKey: Self.calibrationKey)
+        }
+    }
+
+    private var manualFullCharge: ManualFullCharge? {
+        didSet {
+            guard manualFullCharge != oldValue else { return }
+            defaults.set(manualFullCharge.flatMap { try? JSONEncoder().encode($0) }, forKey: Self.manualFullChargeKey)
+        }
+    }
 
     struct ChargePause: Codable, Equatable {
         let originalLimit: Int
@@ -92,6 +110,12 @@ final class BatteryActions {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let session = defaults.data(forKey: Self.calibrationKey)
+            .flatMap { try? JSONDecoder().decode(BatteryCalibration.Session.self, from: $0) }
+        calibration = BatteryCalibration(session: session)
+        manualFullCharge = defaults.data(forKey: Self.manualFullChargeKey)
+            .flatMap { try? JSONDecoder().decode(ManualFullCharge.self, from: $0) }
+            .flatMap { (80..<100).contains($0.limit) ? $0 : nil }
         chargePause = defaults.data(forKey: Self.pauseKey)
             .flatMap { try? JSONDecoder().decode(ChargePause.self, from: $0) }
         externalChargeManagerRunning = Self.isExternalChargeManagerRunning
@@ -107,12 +131,21 @@ final class BatteryActions {
     }
 
     var currentChargeLimit: Int? {
-        guard let charge, charge.valid.boolValue, charge.mode != 3, (80...100).contains(charge.limit) else { return nil }
-        return charge.limit
+        guard let snapshot = chargingSnapshot, snapshot.charge.valid.boolValue, snapshot.charge.mode != 3 else { return nil }
+        return snapshot.configuredLimit
+    }
+
+    var showsCalibrationStatus: Bool {
+        charge?.valid.boolValue == true || calibration.session != nil ||
+            (calibration.status != .inactive && calibration.status != .unavailable)
+    }
+
+    var chargingControlsDisabled: Bool {
+        chargeBusy || externalChargeManagerRunning || calibration.blocksChargingChanges
     }
 
     func limitForPause(_ reading: BatteryReading) -> Int? {
-        guard reading.pluggedIn, reading.charging, let currentChargeLimit,
+        guard !calibration.blocksChargingChanges, reading.pluggedIn, reading.charging, let currentChargeLimit,
               availableChargeLimits.contains(currentChargeLimit) else { return nil }
         return availableChargeLimits.last { $0 <= reading.percent && $0 < currentChargeLimit }
     }
@@ -149,12 +182,14 @@ final class BatteryActions {
                 }
                 return TRSetChargeLimit(limit, current)
             }.value
-            var latest = await Task.detached(priority: .utility) { TRReadChargeState() }.value
+            var snapshot = await Task.detached(priority: .utility) { NativeChargingSnapshot.read() }.value
+            var latest = snapshot.charge
             var verified = latest.valid.boolValue && latest.mode != 3 && latest.limit == limit
             if accepted && !verified {
                 for _ in 0..<6 {
                     try? await Task.sleep(for: .milliseconds(450))
-                    latest = await Task.detached(priority: .utility) { TRReadChargeState() }.value
+                    snapshot = await Task.detached(priority: .utility) { NativeChargingSnapshot.read() }.value
+                    latest = snapshot.charge
                     verified = latest.valid.boolValue && latest.mode != 3 && latest.limit == limit
                     if verified { break }
                 }
@@ -164,7 +199,7 @@ final class BatteryActions {
                 chargePause = previousPause
             }
             chargeBusy = false
-            apply(latest)
+            apply(snapshot)
             if !verified {
                 chargeError = accepted
                     ? "macOS did not confirm the new charge limit."
@@ -174,6 +209,10 @@ final class BatteryActions {
     }
 
     private func canWriteChargingSettings() -> Bool {
+        guard !calibration.blocksChargingChanges else {
+            chargeError = "Charging controls are paused during macOS battery calibration."
+            return false
+        }
         externalChargeManagerRunning = Self.isExternalChargeManagerRunning
         if externalChargeManagerRunning {
             chargeError = "Quit AlDente before changing charging settings in TrioRing."
@@ -182,52 +221,81 @@ final class BatteryActions {
     }
     private let log = Logger(subsystem: "com.willhsu.ring-a-bar", category: "BatteryActions")
 
-    var temporarilyOverriddenLimit: Int? { charge?.mode == 3 ? restoreLimit : nil }
+    var temporarilyOverriddenLimit: Int? {
+        guard let request = manualFullCharge, request.confirmed,
+              chargingSnapshot?.hasManualOverride(for: request.limit) == true else { return nil }
+        return request.limit
+    }
 
     enum Offer: Equatable { case unavailable, none, charge(Int?), waiting, cancel(Int), systemOverride }
 
     func offer(for reading: BatteryReading?) -> Offer {
+        guard !calibration.blocksChargingChanges, chargePause == nil, let charge else { return .none }
+        if let limit = temporarilyOverriddenLimit { return .cancel(limit) }
         guard let reading, reading.pluggedIn, reading.percent < 100 else { return .none }
-        guard let charge else { return .none }
         guard charge.valid.boolValue else { return .unavailable }
-        if chargePause != nil { return .none }
-        if charge.mode == 3 {
-            if let restoreLimit { return .cancel(restoreLimit) }
-            return .systemOverride
+        if charge.mode == 3 { return .systemOverride }
+        if manualFullCharge?.isWaiting(at: .now) == true ||
+            (optimizedChargeRequestedAt.map { Date.now.timeIntervalSince($0) < 25 } == true && !reading.charging) {
+            return .waiting
         }
-        if let requestedAt, Date().timeIntervalSince(requestedAt) < 25, !reading.charging { return .waiting }
         if charge.mode == 1, (80..<100).contains(charge.limit) { return .charge(charge.limit) }
         if charge.canResume.boolValue && !reading.charging { return .charge(nil) }
         return .none
     }
 
-    func refresh() async {
+    func startCalibrationObservation() {
+        guard calibrationObservationToken < 0 else { return }
+        calibrationObservationToken = TRObserveSystemCalibration { [weak self] in
+            MainActor.assumeIsolated { self?.refreshChargingInBackground(force: true) }
+        }
+        refreshChargingInBackground(force: true)
+    }
+
+    func stopCalibrationObservation() {
+        TRStopObservingSystemCalibration(calibrationObservationToken)
+        calibrationObservationToken = -1
+    }
+
+    func refreshChargingInBackground(force: Bool = false) {
+        guard force || calibration.session != nil || manualFullCharge != nil ||
+                TRReadSystemCalibration() == .active else { return }
+        Task { await refreshCharging() }
+    }
+
+    private func refreshCharging() async {
+        guard !chargeBusy else { return }
         let revision = chargeWriteRevision
-        let startedWhileWriting = chargeBusy
-        let (charge, modes) = await Task.detached(priority: .utility) {
-            (TRReadChargeState(), PowerModeState.read())
-        }.value
+        chargeReadRevision += 1
+        let readRevision = chargeReadRevision
+        let snapshot = await Task.detached(priority: .utility) { NativeChargingSnapshot.read() }.value
+        guard !Task.isCancelled, revision == chargeWriteRevision, readRevision > appliedChargeReadRevision else { return }
+        appliedChargeReadRevision = readRevision
+        apply(snapshot)
+    }
+
+    func refresh() async {
+        async let charging: Void = refreshCharging()
+        let modes = await Task.detached(priority: .utility) { PowerModeState.read() }.value
+        await charging
         guard !Task.isCancelled else { return }
         externalChargeManagerRunning = Self.isExternalChargeManagerRunning
-        if !startedWhileWriting && revision == chargeWriteRevision { apply(charge) }
         if !modeBusy { self.modes = modes }
         if modes?.supportsLow == true || modes?.supportsHigh == true {
             await powerAuthorization.refresh()
         }
     }
 
-    private func apply(_ state: TRChargeState) {
+    func apply(_ snapshot: NativeChargingSnapshot) {
         guard !chargeBusy else { return }
-        charge = state
-        if state.valid.boolValue {
-            if let chargePause, state.mode != 3, (80...100).contains(state.limit),
-               state.limit != chargePause.pausedLimit { self.chargePause = nil }
-            if state.mode == 3 { observedOverride = true }
-            else if observedOverride || (requestedAt.map { Date().timeIntervalSince($0) > 25 } ?? false) {
-                restoreLimit = nil
-                observedOverride = false
-                requestedAt = nil
-            }
+        chargingSnapshot = snapshot
+        calibration.update(with: snapshot)
+        guard !calibration.blocksChargingChanges else { return }
+        manualFullCharge = manualFullCharge?.reconciled(with: snapshot, at: .now)
+        let state = snapshot.charge
+        if let chargePause, state.valid.boolValue, state.mode != 3, (80...100).contains(state.limit),
+           state.limit != chargePause.pausedLimit {
+            self.chargePause = nil
         }
     }
 
@@ -245,38 +313,43 @@ final class BatteryActions {
         chargeError = nil
         chargeBusy = true
         chargeWriteRevision += 1
+        // Save ownership before sending the native request so a relaunch can
+        // reconcile it with the live override, even if the callback was lost.
+        if !restore && limit > 0 { manualFullCharge = ManualFullCharge(limit: limit, requestedAt: .now) }
         log.notice("Charging action selected: restore=\(restore)")
         Task {
             let accepted = await Task.detached(priority: .userInitiated) {
+                if restore {
+                    guard NativeChargingSnapshot.read().hasManualOverride(for: limit) else { return false }
+                    return TRRestoreChargeLimit(limit)
+                }
                 guard let live = BatteryMonitor.read().reading, live.pluggedIn, live.percent < 100 else { return false }
-                return restore ? TRRestoreChargeLimit(limit) : TRRequestFullCharge(limit, !live.charging)
+                return TRRequestFullCharge(limit, !live.charging)
             }.value
             log.notice("Charging request accepted: \(accepted)")
-            if accepted && !restore {
-                restoreLimit = limit > 0 ? limit : nil
-                requestedAt = Date()
-                observedOverride = false
+            if !restore {
+                if !accepted && limit > 0 { manualFullCharge = nil }
+                if accepted && limit == 0 { optimizedChargeRequestedAt = .now }
             }
+            var snapshot: NativeChargingSnapshot?
             var verified = false
             for attempt in 0..<(accepted ? 20 : 1) {
                 if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
                 let (latest, live) = await Task.detached(priority: .utility) {
-                    (TRReadChargeState(), BatteryMonitor.read().reading)
+                    (NativeChargingSnapshot.read(), limit == 0 ? BatteryMonitor.read().reading : nil)
                 }.value
-                charge = latest
+                snapshot = latest
                 if accepted {
-                    if restore { verified = latest.valid.boolValue && latest.mode != 3 && latest.limit == limit }
-                    else if limit > 0 { verified = latest.valid.boolValue && latest.mode == 3 }
+                    if restore { verified = latest.confirmsRestoredLimit(limit) }
+                    else if limit > 0 { verified = latest.systemCalibration != .active && latest.hasManualOverride(for: limit) }
                     else { verified = live?.charging == true }
-                    if verified {
-                        if !restore && latest.valid.boolValue && latest.mode == 3 { observedOverride = true }
-                        break
-                    }
+                    if verified { break }
                 }
             }
             chargeBusy = false
             log.notice("Charging state confirmed: \(verified)")
-            if restore && verified { restoreLimit = nil; requestedAt = nil; observedOverride = false }
+            if restore && verified { manualFullCharge = nil }
+            if let snapshot { apply(snapshot) }
             if !accepted { chargeError = "macOS did not accept the charging request." }
             else if !verified { chargeError = "macOS accepted the request; the new charging state is not confirmed yet." }
         }

@@ -20,6 +20,52 @@ private struct ChargeActionLabel: View {
     }
 }
 
+struct BatteryCalibrationRow: View {
+    let status: BatteryCalibration.Status
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Label("macOS Battery Calibration", systemImage: "bolt.badge.clock")
+                Spacer(minLength: 6)
+                Text(value).foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            if let description {
+                Text(description).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("RingABar.battery.calibration")
+    }
+
+    private var value: LocalizedStringKey {
+        switch status {
+        case .unavailable: "Status unavailable"
+        case .inactive: "Not running"
+        case .active: "Calibrating"
+        case .checking: "Checking limit"
+        case let .restored(limit): "\(limit)% limit restored"
+        case .changed, .finished: "Calibration ended"
+        }
+    }
+
+    private var description: LocalizedStringKey? {
+        switch status {
+        case let .active(limit):
+            if let limit { "macOS may charge to 100%. TrioRing will check the original \(limit)% limit when calibration ends." }
+            else { "macOS may charge to 100% during calibration." }
+        case let .checking(limit):
+            "Waiting for macOS to confirm the original \(limit)% charge limit."
+        case let .changed(original, current):
+            "The current charge limit is \(current)%. Before calibration it was \(original)%."
+        case .finished:
+            "The original charge limit could not be verified."
+        default: nil
+        }
+    }
+}
+
 struct FullChargeRow: View {
     let actions: BatteryActions
     let reading: BatteryReading?
@@ -28,7 +74,9 @@ struct FullChargeRow: View {
     let onSystemSettings: () -> Void
 
     private var offer: BatteryActions.Offer { actions.offer(for: reading) }
-    private var showsChargingOptions: Bool { reading?.isPausedAtLimit == true && actions.chargePause == nil }
+    private var showsChargingOptions: Bool {
+        !actions.calibration.blocksChargingChanges && reading?.isPausedAtLimit == true && actions.chargePause == nil
+    }
 
     var hasContent: Bool {
         if actions.chargeBusy || actions.chargeError != nil { return true }
@@ -51,7 +99,7 @@ struct FullChargeRow: View {
                     }
                 case let .cancel(limit):
                     chargeButton("Resume \(limit)% Charge Limit", symbol: "arrow.uturn.backward", writesSetting: true) { actions.runCharge(for: reading) }
-                    if reading?.charging == false {
+                    if let reading, reading.pluggedIn, reading.percent < 100, !reading.charging {
                         Text("The override is active. macOS still reports charging paused.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -91,7 +139,7 @@ struct FullChargeRow: View {
             }
         }
         .buttonStyle(PanelActionStyle(cornerRadius: compact ? 9 : 8))
-        .disabled(writesSetting && actions.externalChargeManagerRunning)
+        .disabled(writesSetting && actions.chargingControlsDisabled)
         .accessibilityIdentifier("RingABar.battery.chargeAction")
     }
 }
@@ -127,7 +175,7 @@ struct ChargeLimitControls: View {
                         .accessibilityValue(Text("\(limit)%"))
                         .accessibilityIdentifier("RingABar.battery.setChargeLimit")
                     }
-                    .disabled(actions.chargeBusy || actions.externalChargeManagerRunning)
+                    .disabled(actions.chargingControlsDisabled)
 
                     if let pause = actions.chargePause, pause.pausedLimit == limit {
                         pauseButton("Restore \(pause.originalLimit)% Charge Limit", symbol: "arrow.uturn.backward",
@@ -151,7 +199,7 @@ struct ChargeLimitControls: View {
     private func pauseButton(_ title: LocalizedStringKey, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { ChargeActionLabel(title: title, symbol: symbol) }
             .buttonStyle(PanelActionStyle(cornerRadius: 8))
-            .disabled(actions.chargeBusy || actions.externalChargeManagerRunning)
+            .disabled(actions.chargingControlsDisabled)
     }
 }
 

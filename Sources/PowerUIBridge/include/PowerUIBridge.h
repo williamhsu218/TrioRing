@@ -8,6 +8,16 @@ typedef struct {
     uint32_t allowedLimits;
 } TRChargeState;
 
+typedef NS_ENUM(NSInteger, TRSystemCalibration) {
+    TRSystemCalibrationUnknown,
+    TRSystemCalibrationInactive,
+    TRSystemCalibrationActive,
+};
+
+TRSystemCalibration TRReadSystemCalibration(void);
+int TRObserveSystemCalibration(void (^ _Nonnull handler)(void));
+void TRStopObservingSystemCalibration(int token);
+
 TRChargeState TRReadChargeState(void);
 BOOL TRRequestFullCharge(NSInteger expectedLimit, BOOL allowOptimizedPause);
 BOOL TRRestoreChargeLimit(NSInteger expectedLimit);

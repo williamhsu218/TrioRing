@@ -153,6 +153,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         refreshIconTelemetry()
         refreshIcon()
         battery.start()
+        batteryActions.startCalibrationObservation()
         network.start()
         audio.start()
         globalShortcut.start()
@@ -184,6 +185,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let powerObserver { NotificationCenter.default.removeObserver(powerObserver) }
         battery.stop()
+        batteryActions.stopCalibrationObservation()
         network.stop()
         audio.stop()
     }
@@ -552,6 +554,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
 
     private func refreshStatus() {
         battery.refresh()
+        batteryActions.refreshChargingInBackground()
         network.refresh()
         audio.refresh()
         refreshIconTelemetry()

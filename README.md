@@ -6,7 +6,7 @@
 
 <img src="docs/images/battery-dark.png" width="285" alt="深色模式的电池详情，显示功率流和充电管理"> <img src="docs/images/audio-light.png" width="285" alt="浅色模式的音频详情，带全宽输入和输出切换控件">
 
-- **电池** · 充电暂停会明写。支持的 Mac 能看功率流、电池健康和 USB‑C 端口功耗，也能调整充电上限或临时充满。
+- **电池** · 充电暂停和 macOS 校准会明写。支持的 Mac 能看功率流、电池健康和 USB‑C 端口功耗，也能调整充电上限或临时充满。
 - **网络** · 看当前 Wi‑Fi、IP、VPN 和系统代理。授权定位后可以扫描附近网络，从紧凑列表里选；企业网络交给 macOS 设置。
 - **声音** · 首页就能调音量、静音和切输出。支持的 AirPods 还能看分耳和充电盒电量，点图标切换降噪、通透或自适应。
 
@@ -16,7 +16,7 @@
 
 需要 Apple Silicon Mac 和 macOS 26 或更新版本。界面提供简体中文和英文。
 
-**[下载 TrioRing 0.7.36（DMG）](https://github.com/williamhsu218/TrioRing/releases/download/v0.7.36/TrioRing-0.7.36-arm64.dmg)**
+**[下载 TrioRing 0.7.37（DMG）](https://github.com/williamhsu218/TrioRing/releases/download/v0.7.37/TrioRing-0.7.37-arm64.dmg)**
 
 这个预览包用 **Apple Development** 签名，**未经过 Apple 公证**。打开 DMG 后，把 TrioRing 拖进「应用程序」。macOS 可能会阻止首次启动。
 
@@ -39,7 +39,7 @@ cd TrioRing
 - 附近 Wi‑Fi 扫描需要定位授权。切换电量模式需要在 macOS 批准一次后台助手，助手还需要与 App 一起签名。
 - 功耗读数、充电控制和 AirPods 聆听模式取决于硬件与系统版本。TrioRing 检测到 AlDente 正在运行时会暂停写入充电设置。
 
-[下载 0.7.36 源码](https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.36) · [版本记录](https://github.com/williamhsu218/TrioRing/releases)
+[查看 0.7.37 版本](https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.37) · [版本记录](https://github.com/williamhsu218/TrioRing/releases)
 
 ## 开发
 
@@ -55,7 +55,7 @@ TRIORING_RENDER_UI=1 swift test --filter PanelUXRenderTests
 用与上一版相同的 Apple 签名身份构建 App，再运行 `./script/package.sh`。DMG 上传到对应版本的 GitHub Release 后，生成并提交更新源。
 
 ```bash
-./script/make_appcast.sh /path/to/Sparkle/bin dist/TrioRing-0.7.36-arm64.dmg > dist/appcast.xml \
+./script/make_appcast.sh /path/to/Sparkle/bin dist/TrioRing-0.7.37-arm64.dmg > dist/appcast.xml \
   && mv dist/appcast.xml updates/appcast.xml
 ```
 
