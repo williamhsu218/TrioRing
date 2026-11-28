@@ -28,7 +28,6 @@ fi
 
 swift build -c release --product "$APP_NAME"
 swift build -c release --product TrioRingPowerHelper
-swift build -c release --product TrioRingLauncher
 BUILD_DIR="$(swift build -c release --show-bin-path)"
 STAGING_DIR="$(mktemp -d "$DIST_DIR/.staging.XXXXXX")"
 # Resolve and check every cleanup target before deleting a generated tree.
@@ -60,28 +59,7 @@ plutil -lint "$STAGED_APP/Contents/Info.plist" Resources/TrioRing.entitlements >
 
 # Always install Helpers
 mkdir -p "$STAGED_APP/Contents/Helpers" "$STAGED_APP/Contents/Library/LaunchDaemons"
-mkdir -p "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app/Contents/MacOS"
 cp "$BUILD_DIR/TrioRingPowerHelper" "$STAGED_APP/Contents/Helpers/"
-cp "$BUILD_DIR/TrioRingLauncher" "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app/Contents/MacOS/TrioRingLauncher"
-# Create a minimal Info.plist for the launcher
-cat <<EOF > "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app/Contents/Info.plist"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>$BUNDLE_ID.Launcher</string>
-    <key>CFBundleName</key>
-    <string>TrioRingLauncher</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-</dict>
-</plist>
-EOF
 cp "Resources/$BUNDLE_ID.PowerMode.plist" "$STAGED_APP/Contents/Library/LaunchDaemons/"
 plutil -lint "$STAGED_APP/Contents/Library/LaunchDaemons/$BUNDLE_ID.PowerMode.plist" >/dev/null
 
@@ -100,15 +78,11 @@ codesign "${SPARKLE_SIGN_FLAGS[@]}" "$SPARKLE_FRAMEWORK"
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.PowerMode" --options runtime "$TIMESTAMP_FLAG" \
     "$STAGED_APP/Contents/Helpers/TrioRingPowerHelper"
-  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.Launcher" --options runtime "$TIMESTAMP_FLAG" \
-    "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app"
   codesign --force --sign "$SIGN_IDENTITY" --options runtime "$TIMESTAMP_FLAG" \
     --entitlements Resources/TrioRing.entitlements "$STAGED_APP"
 else
   codesign --force --sign - --options runtime \
     "$STAGED_APP/Contents/Helpers/TrioRingPowerHelper"
-  codesign --force --sign - --options runtime \
-    "$STAGED_APP/Contents/Library/LoginItems/TrioRingLauncher.app"
   codesign --force --sign - --options runtime \
     --entitlements Resources/TrioRing.entitlements "$STAGED_APP"
 fi

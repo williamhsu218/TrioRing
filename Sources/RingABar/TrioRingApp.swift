@@ -18,7 +18,7 @@ struct TrioRingApp {
 }
 
 @MainActor
-private final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate, @preconcurrency SPUStandardUserDriverDelegate {
+private final class AppController: NSObject, NSApplicationDelegate, @preconcurrency SPUStandardUserDriverDelegate {
     private let store = StatusStore()
     private let preferences = Preferences()
     private let batteryActions = BatteryActions()
@@ -31,27 +31,38 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     private var accentSizeConstraints: [NSLayoutConstraint] = []
     private var iconPowerTask: Task<Void, Never>?
     private var iconTelemetrySource: MiddleIconSource?
-    private let logger = Logger(subsystem: "com.willhsu.ring-a-bar", category: "Status")
+    private let logger = AppIdentity.logger(category: "Status")
     private var item: NSStatusItem?
     private var lastIcon: StatusIcon?
     private var fallbackTimer: Timer?
-    private var volumeWrite: Task<Void, Never>?
-    private var queuedVolume: (value: Double, device: UInt32)?
+    private var isSystemAsleep = false
+    private var isScreenAsleep = false
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
-    private var settingsWindow: NSWindowController?
     private var powerObserver: NSObjectProtocol?
+    private var inputSourceObserver: NSObjectProtocol?
     private var hostingController: NSHostingController<StatusPanel>?
     private lazy var updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: self)
+    private lazy var updaterState = UpdaterState(updater: updater.updater)
     private let updateBadge = StatusIconAccentView()
 
-    private var recordingMonitor: Any?
-    private var pressedRecordingModifiers = false
-    private var recordingSawKey = false
+    private lazy var volumeScroll = VolumeScrollController(
+        store: store, preferences: preferences, audio: audio, panel: panel
+    )
 
     private lazy var globalShortcut = GlobalShortcutController(preferences: preferences, backend: CarbonShortcutBackend()) { [weak self] in
         self?.togglePanelFromShortcut()
     }
+
+    private lazy var settingsCoordinator = SettingsWindowCoordinator(
+        preferences: preferences,
+        store: store,
+        audio: audio,
+        batteryActions: batteryActions,
+        wifiAccess: wifiAccess,
+        globalShortcut: globalShortcut,
+        updaterState: updaterState
+    )
 
     private lazy var battery = BatteryMonitor { [weak self] status in
         self?.updateBattery(status)
@@ -100,10 +111,12 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         }
         self.item = item
         updater.startUpdater()
+        _ = updaterState
         preferences.onIconChange = { [weak self] in
             guard let self else { return }
             if self.iconTelemetrySource != self.preferences.icon.middleSource {
                 self.refreshIconTelemetry()
+                self.scheduleFallbackTimer()
             }
             self.refreshIcon()
         }
@@ -111,10 +124,13 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
             self, selector: #selector(screenParametersChanged(_:)),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(inputSourceChanged(_:)),
-            name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil
-        )
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleInputSourceChanged() }
+        }
 
         let hostingController = NSHostingController(rootView: StatusPanel(
             store: store,
@@ -123,7 +139,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
             audio: audio,
             batteryActions: batteryActions,
             wifiAccess: wifiAccess,
-            onVolume: { [weak self] value, device in self?.scheduleVolume(value, on: device) },
+            onVolume: { [weak self] value, device in self?.volumeScroll.scheduleVolume(value, on: device) },
             onMute: { [weak self] muted, device in self?.audio.setMuted(muted, on: device) },
             onClose: { [weak self] in self?.closePanel() },
             onSettings: { [weak self] in self?.openSettings() },
@@ -157,31 +173,42 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         network.start()
         audio.start()
         globalShortcut.start()
-        NSWorkspace.shared.notificationCenter.addObserver(
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceCenter.addObserver(
+            self, selector: #selector(willSleep(_:)), name: NSWorkspace.willSleepNotification, object: nil
+        )
+        workspaceCenter.addObserver(
             self, selector: #selector(didWake(_:)), name: NSWorkspace.didWakeNotification, object: nil
+        )
+        workspaceCenter.addObserver(
+            self, selector: #selector(screensDidSleep(_:)), name: NSWorkspace.screensDidSleepNotification, object: nil
+        )
+        workspaceCenter.addObserver(
+            self, selector: #selector(screensDidWake(_:)), name: NSWorkspace.screensDidWakeNotification, object: nil
         )
         powerObserver = NotificationCenter.default.addObserver(
             forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.battery.refresh() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.battery.refresh()
+                self.batteryActions.refreshPowerModes(pluggedIn: self.store.battery.reading?.pluggedIn)
+            }
         }
-        let timer = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshStatus() }
-        }
-        timer.tolerance = 3
-        RunLoop.main.add(timer, forMode: .common)
-        fallbackTimer = timer
+        scheduleFallbackTimer()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         iconPowerTask?.cancel()
-        DistributedNotificationCenter.default().removeObserver(self)
+        if let inputSourceObserver { DistributedNotificationCenter.default().removeObserver(inputSourceObserver) }
         NotificationCenter.default.removeObserver(self)
-        volumeWrite?.cancel()
-        removeRecordingMonitor()
+        volumeScroll.cancel()
+        settingsCoordinator.stop()
         globalShortcut.stop()
         removePanelEventMonitors()
         fallbackTimer?.invalidate()
+        fallbackTimer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let powerObserver { NotificationCenter.default.removeObserver(powerObserver) }
         battery.stop()
@@ -204,7 +231,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if settingsWindow?.window?.isVisible == true {
+        if settingsCoordinator.isVisible {
             openSettings()
         } else {
             showPanel()
@@ -279,7 +306,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
             let consume = MainActor.assumeIsolated {
                 guard let self else { return false }
-                if event.type == .scrollWheel { return self.adjustVolumeFromScroll(event) }
+                if event.type == .scrollWheel { return self.volumeScroll.handleScroll(event) }
                 if event.type == .keyDown {
                     if event.keyCode == 53, self.store.batteryInfoVisible,
                        event.window === self.panel || event.window?.parent === self.panel {
@@ -316,7 +343,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
             return consume ? nil : event
         }
         globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dismissIfOutside() }
+            Task { @MainActor [weak self] in self?.dismissIfOutside() }
         }
         logger.notice("Panel opened")
     }
@@ -331,7 +358,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         let updates = menu.addItem(withTitle: String(localized: "Check for Updates…"),
                                    action: #selector(checkForUpdates), keyEquivalent: "")
         updates.target = self
-        updates.isEnabled = updater.updater.canCheckForUpdates
+        updates.isEnabled = updaterState.canCheckForUpdates
         menu.autoenablesItems = false
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: String(localized: "Quit TrioRing"), action: #selector(quitApp), keyEquivalent: "q")
@@ -344,7 +371,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
     @objc private func openSettings() { showSettings() }
 
     @objc private func checkForUpdates() {
-        guard updater.updater.canCheckForUpdates else { return }
+        guard updaterState.canCheckForUpdates else { return }
         closePanel()
         NSApp.activate()
         updater.checkForUpdates(nil)
@@ -377,110 +404,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
 
     private func showSettings(_ section: SettingsCategory? = nil) {
         closePanel()
-        if let section {
-            cancelShortcutRecording()
-            store.settingsCategory = section
-        }
-        if store.settingsCategory == .icon && (section == .icon || settingsWindow?.window?.isVisible != true) {
-            store.settingsIconLeaf = .overall
-        }
-        if settingsWindow == nil {
-            let hosting = NSHostingController(rootView: SettingsView(
-                preferences: preferences, store: store, audio: audio,
-                batteryActions: batteryActions, wifiAccess: wifiAccess, globalShortcut: globalShortcut,
-                onRecordShortcut: { [weak self] in self?.beginShortcutRecording() },
-                onCancelShortcut: { [weak self] in self?.cancelShortcutRecording() },
-                automaticallyChecksForUpdates: Binding(
-                    get: { [updater] in updater.updater.automaticallyChecksForUpdates },
-                    set: { [updater] in updater.updater.automaticallyChecksForUpdates = $0 }
-                )
-            ))
-            let window = NSWindow(contentViewController: hosting)
-            window.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
-            window.titleVisibility = .hidden
-            window.contentMinSize = SettingsView.windowSize
-            window.title = String(localized: "TrioRing Settings")
-            window.isReleasedWhenClosed = false
-            window.delegate = self
-            window.setContentSize(SettingsView.windowSize)
-            if !window.setFrameUsingName("TrioRingSettings") { window.center() }
-            window.setFrameAutosaveName("TrioRingSettings")
-            window.setAccessibilityIdentifier("RingABar.settingsWindow")
-            settingsWindow = NSWindowController(window: window)
-        }
-        store.settingsVisible = true
-        settingsWindow?.showWindow(nil)
-        settingsWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        logger.notice("Settings opened")
-    }
-
-    private func beginShortcutRecording() {
-        guard settingsWindow?.window?.isKeyWindow == true, recordingMonitor == nil else { return }
-        globalShortcut.beginRecording()
-        guard globalShortcut.isRecording else { return }
-        pressedRecordingModifiers = false
-        recordingMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] event in
-            let consumed = MainActor.assumeIsolated {
-                self?.consumeShortcutEvent(event) ?? false
-            }
-            return consumed ? nil : event
-        }
-        if recordingMonitor == nil { cancelShortcutRecording() }
-    }
-
-    private func consumeShortcutEvent(_ event: NSEvent) -> Bool {
-        guard globalShortcut.isRecording, let window = settingsWindow?.window else { return false }
-        if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown
-            || event.window !== window {
-            cancelShortcutRecording()
-            return false
-        }
-
-        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if event.type == .flagsChanged {
-            if modifiers.isEmpty {
-                if pressedRecordingModifiers && !recordingSawKey { globalShortcut.record(nil) }
-                pressedRecordingModifiers = false
-                recordingSawKey = false
-            } else {
-                pressedRecordingModifiers = true
-            }
-            return true
-        }
-
-        guard !event.isARepeat else { return true }
-        recordingSawKey = !modifiers.isEmpty
-        if event.keyCode == 53 && modifiers.isEmpty {
-            cancelShortcutRecording()
-        } else {
-            globalShortcut.record(StatusPanelShortcut(event: event))
-            if !globalShortcut.isRecording { removeRecordingMonitor() }
-        }
-        return true
-    }
-
-    private func cancelShortcutRecording() {
-        removeRecordingMonitor()
-        globalShortcut.cancelRecording()
-    }
-
-    private func removeRecordingMonitor() {
-        if let recordingMonitor { NSEvent.removeMonitor(recordingMonitor) }
-        recordingMonitor = nil
-        pressedRecordingModifiers = false
-        recordingSawKey = false
-    }
-
-    func windowDidResignKey(_ notification: Notification) {
-        cancelShortcutRecording()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        cancelShortcutRecording()
-        store.settingsVisible = false
+        settingsCoordinator.show(section)
     }
 
     @objc private func quitApp() {
@@ -547,9 +471,45 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         globalEventMonitor = nil
     }
 
+    private func scheduleFallbackTimer() {
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+        guard !isSystemAsleep && !isScreenAsleep else { return }
+        let needsLivePower = preferences.icon.middleSource == .power
+        let interval: TimeInterval = needsLivePower ? 20 : 60
+        let tolerance: TimeInterval = needsLivePower ? 3 : 10
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshStatus() }
+        }
+        timer.tolerance = tolerance
+        RunLoop.main.add(timer, forMode: .common)
+        fallbackTimer = timer
+    }
+
+    @objc private func willSleep(_ notification: Notification) {
+        isSystemAsleep = true
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+    }
+
     @objc private func didWake(_ notification: Notification) {
+        isSystemAsleep = false
+        isScreenAsleep = false
+        scheduleFallbackTimer()
         refreshStatus()
         logger.notice("Refreshed after wake")
+    }
+
+    @objc private func screensDidSleep(_ notification: Notification) {
+        isScreenAsleep = true
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+    }
+
+    @objc private func screensDidWake(_ notification: Notification) {
+        isScreenAsleep = false
+        scheduleFallbackTimer()
+        refreshStatus()
     }
 
     private func refreshStatus() {
@@ -572,7 +532,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         store.maximumMenuBarIconSize = max(IconPreferences.menuBarSizes.lowerBound, Int(menuBarHeight.rounded(.down)) - 1)
     }
 
-    @objc private func inputSourceChanged(_ notification: Notification) {
+    private func handleInputSourceChanged() {
         guard preferences.icon.middleSource == .inputSource else { return }
         updateIconInputSource()
         refreshIcon()
@@ -622,50 +582,6 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
         }
     }
 
-    private func scheduleVolume(_ value: Double, on device: UInt32) {
-        queuedVolume = (value, device)
-        volumeWrite?.cancel()
-        volumeWrite = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(20))
-            } catch {
-                return
-            }
-            self?.queuedVolume = nil
-            self?.audio.setVolume(value, on: device)
-        }
-    }
-
-    private func adjustVolumeFromScroll(_ event: NSEvent) -> Bool {
-        let pointer = NSEvent.mouseLocation
-        let overScrollableSummary = store.page == .summary && store.summaryCanScroll
-            && pointer.y >= panel.frame.minY + StatusPanel.summaryFooterHeight
-        let sliderOnly = preferences.scrollOnVolumeSliderOnly || store.page != .summary || overScrollableSummary
-        let showsOutput = store.page == .summary || (store.page == .details(.audio) && store.audioDirection == .output)
-        guard showsOutput, !sliderOnly || store.pointerOverOutputSlider,
-              preferences.scrollToAdjustVolume, !preferences.hiddenSections.contains(.audio),
-              panel.frame.contains(pointer),
-              store.audio.canSetVolume, let device = store.audio.deviceID, let level = store.audio.volume,
-              abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else { return false }
-        if !event.momentumPhase.isEmpty { return true }
-
-        let current = queuedVolume.flatMap { $0.device == device ? $0.value : nil } ?? level
-        let scroll = preferences.naturalVolumeScroll && event.isDirectionInvertedFromDevice
-            ? -event.scrollingDeltaY : event.scrollingDeltaY
-        let delta = event.hasPreciseScrollingDeltas ? scroll / 240 : (scroll > 0 ? 1.0 / 16 : -1.0 / 16)
-        let next = min(1, max(0, current + delta))
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            let previousStep = Int((current * 16).rounded())
-            let nextStep = Int((next * 16).rounded())
-            if nextStep != previousStep {
-                let pattern: NSHapticFeedbackManager.FeedbackPattern = (nextStep == 0 || nextStep == 16) ? .alignment : .levelChange
-                NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .default)
-            }
-        }
-        scheduleVolume(next, on: device)
-        return true
-    }
-
     private func updateBattery(_ status: BatteryStatus) {
         guard store.battery != status else { return }
         store.battery = status
@@ -682,10 +598,7 @@ private final class AppController: NSObject, NSApplicationDelegate, NSWindowDele
 
     private func updateAudio(_ status: AudioStatus) {
         guard store.audio != status else { return }
-        if store.audio.deviceID != status.deviceID {
-            volumeWrite?.cancel()
-            queuedVolume = nil
-        }
+        volumeScroll.resetIfDeviceChanged(from: store.audio.deviceID, to: status.deviceID)
         store.audio = status
         refreshIcon()
         logger.info("Audio \(status.percent ?? -1, privacy: .public) percent, muted: \(status.muted == true, privacy: .public)")

@@ -5,8 +5,17 @@ struct AirPodsBatteryStatus: View {
     let output: AirPodsOutput
     let deviceSymbol: String
     let isVisible: Bool
-    @State private var battery: AirPodsBattery?
-    @State private var didReadBattery = false
+    var picker: AudioDevicePicker? = nil
+    @State private var localBattery: AirPodsBattery?
+    @State private var localDidRead = false
+
+    private var battery: AirPodsBattery? {
+        picker?.cachedAirPodsBattery(for: output.uid).battery ?? localBattery
+    }
+
+    private var didReadBattery: Bool {
+        picker?.cachedAirPodsBattery(for: output.uid).known ?? localDidRead
+    }
 
     var body: some View {
         Group {
@@ -28,12 +37,20 @@ struct AirPodsBatteryStatus: View {
         .task(id: isVisible ? output.uid : nil) {
             guard isVisible else { return }
             let uid = output.uid
-            while !Task.isCancelled {
-                let result = await Task.detached(priority: .utility) { AirPodsBattery.read(outputUID: uid) }.value
-                guard !Task.isCancelled else { return }
-                battery = result
-                didReadBattery = true
-                try? await Task.sleep(for: .seconds(30))
+            if let picker {
+                while !Task.isCancelled {
+                    await picker.refreshAirPodsBattery(for: uid)
+                    guard !Task.isCancelled else { return }
+                    try? await Task.sleep(for: .seconds(30))
+                }
+            } else {
+                while !Task.isCancelled {
+                    let result = await Task.detached(priority: .utility) { AirPodsBattery.read(outputUID: uid) }.value
+                    guard !Task.isCancelled else { return }
+                    localBattery = result
+                    localDidRead = true
+                    try? await Task.sleep(for: .seconds(30))
+                }
             }
         }
     }

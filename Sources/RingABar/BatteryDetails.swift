@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import IOKit
 import IOKit.ps
+import os
 
 // Adapted from the power sample in Status Trio v1.9.5 (Apache-2.0).
 struct BatteryPowerSample: Equatable, Sendable {
@@ -77,12 +78,40 @@ struct BatteryPowerSnapshot: Sendable {
 }
 
 enum SystemChargeLimit {
+    private struct FileFingerprint: Equatable {
+        let mtimeSec: Int
+        let mtimeNsec: Int
+        let size: off_t
+    }
+
+    private struct CachedLimit {
+        let fingerprint: FileFingerprint
+        let limit: Int?
+    }
+
+    private static let path = "/Library/Preferences/com.apple.powerd.charging.plist"
+    private static let cache = OSAllocatedUnfairLock<CachedLimit?>(initialState: nil)
+
     static func read() -> Int? {
-        let url = URL(fileURLWithPath: "/Library/Preferences/com.apple.powerd.charging.plist")
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        var info = stat()
+        let fingerprint: FileFingerprint? = stat(path, &info) == 0
+            ? FileFingerprint(mtimeSec: info.st_mtimespec.tv_sec, mtimeNsec: info.st_mtimespec.tv_nsec, size: info.st_size)
+            : nil
+        if let fingerprint, let cached = cache.withLock({ $0 }), cached.fingerprint == fingerprint {
+            return cached.limit
+        }
+        let url = URL(fileURLWithPath: path)
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            cache.withLock { $0 = nil }
+            return nil
+        }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 16_385), data.count <= 16_384 else { return nil }
-        return parse(data)
+        let limit = parse(data)
+        if let fingerprint {
+            cache.withLock { $0 = CachedLimit(fingerprint: fingerprint, limit: limit) }
+        }
+        return limit
     }
 
     static func parse(_ data: Data) -> Int? {
@@ -113,6 +142,16 @@ struct BatteryDetails: Sendable {
         case normal, serviceRecommended
     }
 
+    private struct CachedHealth: Sendable {
+        let maximumCapacity: Int?
+        let cycleCount: Int?
+        let condition: Condition?
+        let readAt: Date
+    }
+
+    private static let healthTTL: TimeInterval = 600
+    private static let healthCache = OSAllocatedUnfairLock<CachedHealth?>(initialState: nil)
+
     static func read() -> Self {
         var boot = timeval()
         var size = MemoryLayout<timeval>.size
@@ -121,16 +160,15 @@ struct BatteryDetails: Sendable {
             : nil
         let adapter = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any]
         let watts = (adapter?[kIOPSPowerAdapterWattsKey] as? Int).flatMap { $0 > 0 ? $0 : nil }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
-        process.arguments = ["-timeout", "3", "SPPowerDataType", "-json"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return Self(adapterWatts: watts, uptime: uptime) }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
+
+        let now = Date()
+        if let cached = healthCache.withLock({ $0 }),
+           (0..<healthTTL).contains(now.timeIntervalSince(cached.readAt)) {
+            return Self(maximumCapacity: cached.maximumCapacity, cycleCount: cached.cycleCount,
+                        condition: cached.condition, adapterWatts: watts, uptime: uptime)
+        }
+
+        guard let data = profilerReport(),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let items = root["SPPowerDataType"] as? [[String: Any]],
               let item = items.first(where: { $0["_name"] as? String == "spbattery_information" }),
@@ -146,7 +184,44 @@ struct BatteryDetails: Sendable {
         case "Service Recommended", "Check Battery", "Replace Soon", "Replace Now": .serviceRecommended
         default: nil
         }
+        if capacity != nil || cycles != nil || condition != nil {
+            healthCache.withLock {
+                $0 = CachedHealth(maximumCapacity: capacity, cycleCount: cycles, condition: condition, readAt: now)
+            }
+        }
         return Self(maximumCapacity: capacity, cycleCount: cycles, condition: condition,
                     adapterWatts: watts, uptime: uptime)
+    }
+
+    private static func profilerReport() -> Data? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            return nil
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let output = try? FileHandle(forUpdating: url) else { return nil }
+        defer { try? output.close() }
+
+        let finished = DispatchSemaphore(value: 0)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+        process.arguments = ["-timeout", "3", "SPPowerDataType", "-json"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in finished.signal() }
+        guard (try? process.run()) != nil else { return nil }
+        if finished.wait(timeout: .now() + .seconds(4)) == .timedOut {
+            if process.isRunning { process.terminate() }
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        do {
+            try output.seek(toOffset: 0)
+            let limit = 256 * 1024
+            guard let data = try output.read(upToCount: limit + 1), data.count <= limit else { return nil }
+            return data
+        } catch {
+            return nil
+        }
     }
 }

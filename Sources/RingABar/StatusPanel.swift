@@ -1,124 +1,5 @@
 import AppKit
-import Observation
 import SwiftUI
-
-@MainActor
-@Observable
-final class StatusStore {
-    var battery = BatteryStatus.unavailable
-    var network = NetworkStatus()
-    let wifiConnection = WiFiConnectionController()
-    var audio = AudioStatus()
-    private(set) var page = PanelPage.summary
-    private(set) var navigationFocus: PanelNavigationFocus?
-    private var summaryReturnFocus: PanelNavigationFocus?
-    var panelVisible = false
-    var panelPresentation: UInt64 = 0
-    var audioExpanded = false
-    var showsAllSummaryOutputs = false
-    var audioDirection = AudioDirection.output
-    var inputDevicesExpanded = true
-    var summaryCanScroll = false
-    var pointerOverOutputSlider = false
-    var maximumMenuBarIconSize = IconPreferences.menuBarSizes.upperBound
-    var iconInputSource: String?
-    var iconSystemWatts: Int?
-    var settingsIconLeaf = AppIconLeaf.overall
-    var settingsCategory: SettingsCategory? = .icon
-    var settingsVisible = false
-    var vpn = VPNStatus()
-    var localIP: String?
-    var connectionDisclosureOverride: Bool?
-    var showsMoreConnectionDetails = false
-    var batteryReadingsExpanded = false
-
-    var connectionDetailsExpanded: Bool {
-        get { connectionDisclosureOverride ?? !network.showsWiFi }
-        set { connectionDisclosureOverride = newValue }
-    }
-
-    var panelLayout: PanelLayout {
-        switch page {
-        case .summary: .summary(audioExpanded: audioExpanded, allOutputs: audioExpanded && showsAllSummaryOutputs)
-        case .details(.battery): .battery(readingsExpanded: batteryReadingsExpanded)
-        case .details(.network):
-            .network(wifi: network.showsWiFi, expanded: connectionDetailsExpanded,
-                     more: network.showsWiFi && connectionDetailsExpanded && showsMoreConnectionDetails)
-        case .details(.audio):
-            .audio(direction: audioDirection, inputExpanded: audioDirection == .input && inputDevicesExpanded)
-        }
-    }
-    var batteryInfoVisible = false {
-        didSet {
-            if oldValue != batteryInfoVisible { batteryInfoFocusChange = ProcessInfo.processInfo.systemUptime }
-        }
-    }
-    private(set) var batteryInfoFocusChange: TimeInterval = -.infinity
-
-    func navigate(to destination: PanelPage, fromKeyboard: Bool = false) {
-        switch destination {
-        case .details(let section):
-            summaryReturnFocus = .summary(section)
-            navigationFocus = fromKeyboard ? .back : nil
-        case .summary:
-            navigationFocus = fromKeyboard ? summaryReturnFocus : nil
-            summaryReturnFocus = nil
-        }
-        page = destination
-    }
-
-    func statusIcon(_ preferences: IconPreferences) -> StatusIcon {
-        var appearance = preferences
-        appearance.menuBarSize = min(appearance.menuBarSize, maximumMenuBarIconSize)
-        return StatusIcon(battery: battery, network: network, audio: audio, preferences: appearance,
-                          inputSource: iconInputSource, systemWatts: iconSystemWatts)
-    }
-}
-
-enum PanelPage: Hashable, Sendable { case summary, details(PanelSection) }
-enum PanelNavigationFocus: Hashable {
-    case summary(PanelSection), audioDisclosure, back
-}
-
-enum PanelLayout: Hashable, Sendable {
-    case summary(audioExpanded: Bool, allOutputs: Bool = false)
-    case battery(readingsExpanded: Bool)
-    case network(wifi: Bool, expanded: Bool, more: Bool)
-    case audio(direction: AudioDirection, inputExpanded: Bool)
-}
-
-/// Mark complete layouts as cacheable without delaying provisional/loading geometry.
-struct PanelReadyLayoutKey: PreferenceKey {
-    static let defaultValue: PanelLayout? = nil
-    static func reduce(value: inout PanelLayout?, nextValue: () -> PanelLayout?) {
-        value = nextValue() ?? value
-    }
-}
-
-private struct PanelMeasurement: Equatable, Sendable {
-    let layout: PanelLayout
-    let presentation: UInt64
-    let height: CGFloat
-    let ready: Bool
-}
-
-struct PanelHeightReporter {
-    let layout: PanelLayout
-    let presentation: UInt64
-    let ready: Bool
-    let onHeight: (PanelLayout, UInt64, CGFloat, Bool) -> Void
-
-    func measuring<Content: View>(_ content: Content, adding chromeHeight: CGFloat) -> some View {
-        content.fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: PanelMeasurement.self) { [layout, presentation, ready] proxy in
-                PanelMeasurement(layout: layout, presentation: presentation,
-                                 height: ceil(proxy.size.height) + chromeHeight, ready: ready)
-            } action: { sample in
-                guard sample.height.isFinite, sample.height > chromeHeight else { return }
-                onHeight(sample.layout, sample.presentation, sample.height, sample.ready)
-            }
-    }
-}
 
 struct StatusPanel: View {
     static let summaryFooterHeight: CGFloat = 42
@@ -238,10 +119,12 @@ struct StatusPanel: View {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
-        .task(id: observesBattery) {
+        .task(id: BatteryObservationKey(active: observesBattery, pluggedIn: store.battery.reading?.pluggedIn)) {
             guard observesBattery else { return }
+            var first = true
             while !Task.isCancelled {
-                await batteryActions.refresh()
+                await batteryActions.refresh(includePowerModes: first, pluggedIn: store.battery.reading?.pluggedIn)
+                first = false
                 try? await Task.sleep(for: .seconds(4))
             }
         }
@@ -324,6 +207,11 @@ struct StatusPanel: View {
                 confirmWiFiOff = true
             } else { network.setWiFiPower(false) }
         } else { network.setWiFiPower(true) }
+    }
+
+    private struct BatteryObservationKey: Equatable {
+        let active: Bool
+        let pluggedIn: Bool?
     }
 
     private var observesBattery: Bool {
@@ -854,13 +742,10 @@ struct StatusPanel: View {
         Slider(value: Binding(
             get: { store.audio.deviceID == device ? store.audio.volume ?? volume : volume },
             set: { newValue in
-                let step = Int((min(1, max(0, newValue)) * 16).rounded())
-                let previousStep = lastVolumeHapticStep ?? Int((min(1, max(0, store.audio.volume ?? volume)) * 16).rounded())
-                if !reduceMotion, step != previousStep {
-                    let pattern: NSHapticFeedbackManager.FeedbackPattern = (step == 0 || step == 16) ? .alignment : .levelChange
-                    NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .default)
-                }
-                lastVolumeHapticStep = step
+                let previousStep = lastVolumeHapticStep ?? VolumeHaptics.step(for: store.audio.volume ?? volume)
+                lastVolumeHapticStep = VolumeHaptics.performIfStepChanged(
+                    from: previousStep, to: newValue, reduceMotion: reduceMotion
+                )
                 onVolume(newValue, device)
             }
         ), in: 0...1) {

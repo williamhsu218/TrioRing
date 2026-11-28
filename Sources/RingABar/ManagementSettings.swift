@@ -70,12 +70,20 @@ struct BatterySettingsPane: View {
                 SettingsNote(title: "USB readings are per port. Accessories behind a hub share its reading.")
             }
         }
-        .task(id: store.settingsVisible) {
+        .task(id: BatterySettingsRefreshKey(visible: store.settingsVisible, pluggedIn: store.battery.reading?.pluggedIn)) {
+            guard store.settingsVisible else { return }
+            var first = true
             while store.settingsVisible && !Task.isCancelled {
-                await actions.refresh()
+                await actions.refresh(includePowerModes: first, pluggedIn: store.battery.reading?.pluggedIn)
+                first = false
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+    }
+
+    private struct BatterySettingsRefreshKey: Equatable {
+        let visible: Bool
+        let pluggedIn: Bool?
     }
 }
 

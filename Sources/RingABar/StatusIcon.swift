@@ -97,9 +97,9 @@ struct StatusIcon: Equatable {
                 if network.wifiIsHotspot && !preferences.showsWiFiForHotspot {
                     center = glyph("personalhotspot")
                 } else {
-                    let bars = Self.wifiBars(network.signalDBm)
-                    let values = [0.0, 0.33, 0.66, 1.0]
-                    center = glyph("wifi", value: values[bars], dimmed: network.signalDBm != nil && bars == 0)
+                    let bars = WiFiSignalStrength.bars(for: network.signalDBm)
+                    center = glyph("wifi", value: WiFiSignalStrength.variableValue(for: network.signalDBm),
+                                   dimmed: network.signalDBm != nil && bars == 0)
                 }
             case .ethernet:
                 center = preferences.showsWiFiForWired ? glyph("wifi") : .wired
@@ -128,25 +128,24 @@ struct StatusIcon: Equatable {
         }
     }
 
-    private static func wifiBars(_ signal: Int?) -> Int {
-        switch signal {
-        case nil: 0
-        case let value? where value >= -70: 3
-        case let value? where value >= -78: 2
-        case let value? where value >= -88: 1
-        default: 0
-        }
-    }
-
     enum Layer {
         case template, accent, preview
+    }
+
+    private struct SymbolOffsetKey: Hashable {
+        let name: String
+        let value: Double
     }
 
     private static let inactiveAlpha: CGFloat = 0.22
     private static let centerAnchor = CGPoint(x: StatusIconGeometry.artworkCenterX, y: StatusIconGeometry.batteryCenterY)
     private static let textSize = StatusIconGeometry.batteryValueBaseFontSize * 1.8
+    private static let inkReferencePointSize: CGFloat = 100
 
-    @MainActor private static var symbolOffsets: [Glyph: CGFloat] = [:]
+    @MainActor private static var normalizedSymbolOffsets: [SymbolOffsetKey: CGFloat] = [:]
+
+    @MainActor static var cachedInkOffsetCount: Int { normalizedSymbolOffsets.count }
+    @MainActor static func resetInkOffsetCache() { normalizedSymbolOffsets.removeAll() }
 
     @MainActor
     func image(size overrideSize: CGFloat? = nil, layer: Layer, previewForeground: NSColor? = nil) -> NSImage? {
@@ -336,9 +335,22 @@ struct StatusIcon: Equatable {
     @MainActor
     private static func symbol(_ glyph: Glyph, color: NSColor) -> SymbolImage? {
         guard let image = configuredImage(glyph, color: color) else { return nil }
-        let offset = symbolOffsets[glyph] ?? measureInkOffset(image)
-        symbolOffsets[glyph] = offset
-        return SymbolImage(image: image, inkOffset: offset)
+        let key = SymbolOffsetKey(name: glyph.name, value: glyph.value)
+        let ratio: CGFloat
+        if let cached = normalizedSymbolOffsets[key] {
+            ratio = cached
+        } else {
+            let reference = configuredImage(
+                Glyph(name: glyph.name, value: glyph.value, pointSize: inkReferencePointSize),
+                color: .black
+            )
+            let target = reference ?? image
+            let referenceSize = reference != nil ? inkReferencePointSize : glyph.pointSize
+            let measured = measureInkOffset(target)
+            ratio = referenceSize > 0 ? measured / referenceSize : 0
+            normalizedSymbolOffsets[key] = ratio
+        }
+        return SymbolImage(image: image, inkOffset: ratio * glyph.pointSize)
     }
 
     private static func drawSymbol(_ symbol: SymbolImage, at point: CGPoint, in context: CGContext) {

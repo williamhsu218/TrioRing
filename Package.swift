@@ -6,8 +6,7 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [
         .executable(name: "TrioRing", targets: ["RingABar"]),
-        .executable(name: "TrioRingPowerHelper", targets: ["TrioRingPowerHelper"]),
-        .executable(name: "TrioRingLauncher", targets: ["Launcher"])
+        .executable(name: "TrioRingPowerHelper", targets: ["TrioRingPowerHelper"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1")
@@ -21,7 +20,6 @@ let package = Package(
             dependencies: ["PowerUIBridge", "PowerModeServiceProtocol", .product(name: "Sparkle", package: "Sparkle")],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
-        .executableTarget(name: "Launcher"),
         .testTarget(name: "RingABarTests", dependencies: ["RingABar"])
     ]
 )

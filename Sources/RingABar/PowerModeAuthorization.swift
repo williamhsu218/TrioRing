@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import PowerModeServiceProtocol
 import ServiceManagement
 
@@ -81,23 +82,39 @@ final class PowerModeAuthorization {
 
 /// One connection per request. Every failure path shares a single completion.
 private final class PowerModeHelperCall: @unchecked Sendable {
+    private struct Pending: Sendable {
+        var continuation: CheckedContinuation<Bool, Never>?
+        var timeout: Task<Void, Never>?
+    }
+
     private let connection: NSXPCConnection
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool, Never>?
+    private let state: OSAllocatedUnfairLock<Pending>
 
     private init(requirement: String, continuation: CheckedContinuation<Bool, Never>) {
-        self.continuation = continuation
+        state = OSAllocatedUnfairLock(initialState: Pending(continuation: continuation, timeout: nil))
         connection = NSXPCConnection(machServiceName: PowerModeServiceIdentity.helper, options: .privileged)
         connection.setCodeSigningRequirement(requirement)
         connection.remoteObjectInterface = NSXPCInterface(with: PowerModeServiceProtocol.self)
     }
 
-    private func finish(_ result: Bool) {
-        let callback = lock.withLock {
-            let pending = continuation
-            continuation = nil
-            return pending
+    private func setTimeout(_ task: Task<Void, Never>) {
+        let shouldCancel = state.withLock { pending -> Bool in
+            if pending.continuation == nil { return true }
+            pending.timeout = task
+            return false
         }
+        if shouldCancel { task.cancel() }
+    }
+
+    private func finish(_ result: Bool) {
+        let (callback, timeout) = state.withLock { pending -> (CheckedContinuation<Bool, Never>?, Task<Void, Never>?) in
+            let current = pending.continuation
+            let timer = pending.timeout
+            pending.continuation = nil
+            pending.timeout = nil
+            return (current, timer)
+        }
+        timeout?.cancel()
         guard let callback else { return }
         connection.invalidate()
         callback.resume(returning: result)
@@ -114,7 +131,17 @@ private final class PowerModeHelperCall: @unchecked Sendable {
             call.connection.invalidationHandler = { [weak call] in call?.finish(false) }
             call.connection.interruptionHandler = { [weak call] in call?.finish(false) }
             call.connection.resume()
-            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(3)) { call.finish(false) }
+            let deadline: Duration = switch request {
+            case .ping: .seconds(3)
+            case .setMode: .seconds(8)
+            }
+            // Own the request until a reply, connection failure, or timeout finishes it.
+            let timeout = Task {
+                do { try await Task.sleep(for: deadline) }
+                catch { return }
+                call.finish(false)
+            }
+            call.setTimeout(timeout)
             guard let proxy = call.connection.remoteObjectProxyWithErrorHandler({ [weak call] _ in
                 call?.finish(false)
             }) as? PowerModeServiceProtocol else {

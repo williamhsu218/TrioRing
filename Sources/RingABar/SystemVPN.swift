@@ -47,27 +47,45 @@ struct SystemVPNService: Equatable, Sendable {
     enum Result: Equatable, Sendable { case confirmed, rejected, unconfirmed }
     private static let queue = DispatchQueue(label: "com.willhsu.ring-a-bar.vpn", qos: .utility)
 
+    private final class ConnectionBox: @unchecked Sendable {
+        let connection: SCNetworkConnection
+        init(_ connection: SCNetworkConnection) { self.connection = connection }
+    }
+
     static func set(_ requested: Bool, service: Self) async -> Result {
-        await withCheckedContinuation { continuation in
+        let started: ConnectionBox? = await withCheckedContinuation { continuation in
             queue.async {
                 guard let current = read().first(where: { $0.id == service.id }), current.enabled,
                       current.state == service.state, current.state.stable,
-                      let connection = connection(service.id) else { continuation.resume(returning: .rejected); return }
+                      let connection = connection(service.id) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
                 let accepted = requested ? SCNetworkConnectionStart(connection, nil, true)
                                          : SCNetworkConnectionStop(connection, false)
-                guard accepted else { continuation.resume(returning: .rejected); return }
-                let target: SCNetworkConnectionStatus = requested ? .connected : .disconnected
-                // A true return from Start/Stop only acknowledges submission.
-                // The serial utility queue is separate from live network reads.
-                let end = DispatchTime.now().uptimeNanoseconds + 20_000_000_000
-                repeat {
-                    let status = SCNetworkConnectionGetStatus(connection)
-                    if status == target { continuation.resume(returning: .confirmed); return }
-                    if status == .invalid { continuation.resume(returning: .unconfirmed); return }
-                    Thread.sleep(forTimeInterval: 0.25)
-                } while DispatchTime.now().uptimeNanoseconds < end
-                continuation.resume(returning: .unconfirmed)
+                continuation.resume(returning: accepted ? ConnectionBox(connection) : nil)
             }
         }
+        guard let started else { return .rejected }
+        let target: SCNetworkConnectionStatus = requested ? .connected : .disconnected
+        // A true return from Start/Stop only acknowledges submission.
+        // Poll cooperatively without blocking the serial utility queue.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while !Task.isCancelled {
+            let status: SCNetworkConnectionStatus = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(returning: SCNetworkConnectionGetStatus(started.connection))
+                }
+            }
+            if status == target { return .confirmed }
+            if status == .invalid { return .unconfirmed }
+            if ContinuousClock.now >= deadline { break }
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                return .unconfirmed
+            }
+        }
+        return .unconfirmed
     }
 }

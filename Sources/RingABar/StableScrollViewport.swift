@@ -16,6 +16,8 @@ struct StableScrollViewport: NSViewRepresentable {
 }
 
 final class ScrollViewportConfigurationView: NSView {
+    private var configureScheduled = false
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func viewDidMoveToSuperview() {
@@ -44,9 +46,15 @@ final class ScrollViewportConfigurationView: NSView {
 
     func configureAfterAttachment() {
         configure()
+        guard !configureScheduled else { return }
+        configureScheduled = true
         // SwiftUI mounts the background and its native scroll view in the
-        // same update. Retry after that mounting pass, before the next draw.
-        DispatchQueue.main.async { [weak self] in self?.configure() }
+        // same update. Retry once after that mounting pass, before the next draw.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.configureScheduled = false
+            self.configure()
+        }
     }
 
     @objc func configure() {

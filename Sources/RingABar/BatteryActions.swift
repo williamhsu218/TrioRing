@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import os
 import OSLog
 import PowerUIBridge
 import SwiftUI
@@ -30,9 +31,22 @@ struct PowerModeState: Equatable, Sendable {
     var supportsLow: Bool
     var supportsHigh: Bool
 
-    static func read() -> Self? {
-        guard let live = run("/usr/bin/pmset", ["-g", "live"]),
-              let cap = run("/usr/bin/pmset", ["-g", "cap"]) else { return nil }
+    private static let capabilitiesCache = OSAllocatedUnfairLock<[Bool?: String]>(initialState: [:])
+
+    static func read(pluggedIn: Bool? = nil) -> Self? {
+        guard let live = run("/usr/bin/pmset", ["-g", "live"]) else { return nil }
+        let cap: String
+        if let cached = capabilitiesCache.withLock({ $0[pluggedIn] }) {
+            cap = cached
+        } else {
+            guard let measured = run("/usr/bin/pmset", ["-g", "cap"]) else { return nil }
+            capabilitiesCache.withLock { $0[pluggedIn] = measured }
+            cap = measured
+        }
+        return parse(live: live, cap: cap)
+    }
+
+    static func parse(live: String, cap: String) -> Self {
         let keys = Set(cap.split(whereSeparator: \.isWhitespace))
         var values: [Substring: Int] = [:]
         for line in live.split(whereSeparator: \.isNewline) {
@@ -49,17 +63,35 @@ struct PowerModeState: Equatable, Sendable {
     }
 
     private static func run(_ path: String, _ arguments: [String]) -> String? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            return nil
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let output = try? FileHandle(forUpdating: url) else { return nil }
+        defer { try? output.close() }
+
+        let finished = DispatchSemaphore(value: 0)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
-        let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in finished.signal() }
         guard (try? process.run()) != nil else { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        if finished.wait(timeout: .now() + .seconds(4)) == .timedOut {
+            if process.isRunning { process.terminate() }
+            return nil
+        }
         guard process.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)
+        do {
+            try output.seek(toOffset: 0)
+            let limit = 64 * 1024
+            guard let data = try output.read(upToCount: limit + 1), data.count <= limit else { return nil }
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
+        }
     }
 }
 
@@ -121,8 +153,15 @@ final class BatteryActions {
         externalChargeManagerRunning = Self.isExternalChargeManagerRunning
     }
 
+    private static let externalChargeManagerBundleIDs = [
+        "com.apphousekitchen.aldente-pro",
+        "com.apphousekitchen.aldente-free"
+    ]
+
     private static var isExternalChargeManagerRunning: Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apphousekitchen.aldente-pro").isEmpty
+        externalChargeManagerBundleIDs.contains {
+            !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty
+        }
     }
 
     var availableChargeLimits: [Int] {
@@ -274,15 +313,29 @@ final class BatteryActions {
         apply(snapshot)
     }
 
-    func refresh() async {
+    func refresh(includePowerModes: Bool = true, pluggedIn: Bool? = nil) async {
         async let charging: Void = refreshCharging()
-        let modes = await Task.detached(priority: .utility) { PowerModeState.read() }.value
+        let updatedModes: PowerModeState??
+        if includePowerModes || modes == nil {
+            updatedModes = await Task.detached(priority: .utility) { PowerModeState.read(pluggedIn: pluggedIn) }.value
+        } else {
+            updatedModes = nil
+        }
         await charging
         guard !Task.isCancelled else { return }
         externalChargeManagerRunning = Self.isExternalChargeManagerRunning
-        if !modeBusy { self.modes = modes }
+        if let updatedModes, !modeBusy { self.modes = updatedModes }
         if modes?.supportsLow == true || modes?.supportsHigh == true {
             await powerAuthorization.refresh()
+        }
+    }
+
+    func refreshPowerModes(pluggedIn: Bool? = nil) {
+        guard !modeBusy else { return }
+        Task {
+            let latest = await Task.detached(priority: .utility) { PowerModeState.read(pluggedIn: pluggedIn) }.value
+            guard !Task.isCancelled, !modeBusy else { return }
+            self.modes = latest
         }
     }
 
@@ -362,7 +415,7 @@ final class BatteryActions {
         modeBusy = true
         Task {
             let accepted = await powerAuthorization.changeMode(mode.rawValue, onAC: pluggedIn)
-            let latest = await Task.detached(priority: .utility) { PowerModeState.read() }.value
+            let latest = await Task.detached(priority: .utility) { PowerModeState.read(pluggedIn: pluggedIn) }.value
             self.modes = latest
             modeBusy = false
             if !accepted { modeError = "Power mode could not be changed. Check Power Mode Access in Battery settings." }

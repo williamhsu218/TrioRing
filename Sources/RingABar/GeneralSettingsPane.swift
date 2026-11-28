@@ -7,7 +7,7 @@ struct GeneralSettingsPane: View {
     let onRecordShortcut: () -> Void
     let onCancelShortcut: () -> Void
     var automaticallyChecksForUpdates: Binding<Bool>? = nil
-    @StateObject private var loginItemManager = LoginItemManager()
+    @State private var loginItemManager = LoginItemManager()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

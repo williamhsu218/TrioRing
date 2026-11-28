@@ -21,6 +21,38 @@ final class AudioDevicePicker {
     private var airPodsRevision = 0
     private var selectionGeneration = 0
 
+    private struct AirPodsBatteryEntry {
+        let battery: AirPodsBattery?
+        let fetchedAt: Date
+    }
+
+    private var airPodsBatteryCache: [String: AirPodsBatteryEntry] = [:]
+    @ObservationIgnored private var airPodsBatteryInFlight: Set<String> = []
+
+    func cachedAirPodsBattery(for uid: String) -> (known: Bool, battery: AirPodsBattery?) {
+        guard let entry = airPodsBatteryCache[uid] else { return (false, nil) }
+        return (true, entry.battery)
+    }
+
+    func refreshAirPodsBattery(
+        for uid: String,
+        force: Bool = false,
+        read: @Sendable (String) async -> AirPodsBattery? = { uid in
+            await Task.detached(priority: .utility) { AirPodsBattery.read(outputUID: uid) }.value
+        }
+    ) async {
+        if !force, let entry = airPodsBatteryCache[uid],
+           (0..<30).contains(Date.now.timeIntervalSince(entry.fetchedAt)) {
+            return
+        }
+        guard airPodsBatteryInFlight.insert(uid).inserted else { return }
+        defer { airPodsBatteryInFlight.remove(uid) }
+        let result = await read(uid)
+        // A detail page can take over displaying this UID while the summary's task is cancelled.
+        // The completed read belongs to their shared device cache.
+        airPodsBatteryCache[uid] = AirPodsBatteryEntry(battery: result, fetchedAt: .now)
+    }
+
     func refreshWhileVisible(using monitor: AudioMonitor) async {
         while !Task.isCancelled {
             await refresh(using: monitor)
@@ -170,7 +202,8 @@ struct AudioDeviceRows: View {
                         if picker.pendingID == route.id {
                             ProgressView().controlSize(.small).accessibilityHidden(true)
                         } else if let airPods {
-                            AirPodsBatteryStatus(output: airPods, deviceSymbol: route.symbol, isVisible: isPanelVisible)
+                            AirPodsBatteryStatus(output: airPods, deviceSymbol: route.symbol,
+                                                 isVisible: isPanelVisible, picker: picker)
                                 .id(airPods.uid)
                         } else if selected && !showsSummaryChips {
                             Image(systemName: "checkmark")

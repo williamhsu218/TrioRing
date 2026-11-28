@@ -1,12 +1,14 @@
 import Foundation
+import Observation
 import OSLog
 import ServiceManagement
 
 @MainActor
-final class LoginItemManager: ObservableObject {
-    @Published private(set) var status: SMAppService.Status = SMAppService.mainApp.status
-    @Published private(set) var errorMessage: String?
-    private let logger = Logger(subsystem: "com.willhsu.ring-a-bar", category: "LoginItem")
+@Observable
+final class LoginItemManager {
+    private(set) var status: SMAppService.Status = SMAppService.mainApp.status
+    private(set) var errorMessage: String?
+    @ObservationIgnored private let logger = AppIdentity.logger(category: "LoginItem")
 
     var isEnabled: Bool {
         status == .enabled || status == .requiresApproval

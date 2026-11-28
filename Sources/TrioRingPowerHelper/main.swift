@@ -4,16 +4,21 @@ import PowerModeServiceProtocol
 
 final class PowerModeService: NSObject, PowerModeServiceProtocol, NSXPCListenerDelegate, @unchecked Sendable {
     private let work = DispatchQueue(label: "com.willhsu.ring-a-bar.PowerMode.commands")
-    private lazy var idle = DispatchSource.makeTimerSource(queue: work)
+    private let lifecycle = DispatchQueue(label: "com.willhsu.ring-a-bar.PowerMode.lifecycle")
+    // Accessed on work. Keep a timed-out command until Foundation observes its exit.
+    private var activeCommand: Process?
+    private lazy var idle = DispatchSource.makeTimerSource(queue: lifecycle)
 
     func startIdleTimer() {
         idle.setEventHandler { exit(EXIT_SUCCESS) }
-        extendLifetime()
+        idle.schedule(deadline: .now() + .seconds(45))
         idle.activate()
     }
 
     private func extendLifetime() {
-        idle.schedule(deadline: .now() + .seconds(45))
+        lifecycle.async {
+            self.idle.schedule(deadline: .now() + .seconds(45))
+        }
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
@@ -36,15 +41,30 @@ final class PowerModeService: NSObject, PowerModeServiceProtocol, NSXPCListenerD
         nonisolated(unsafe) let sendReply = reply
         work.async {
             self.extendLifetime()
+            guard self.activeCommand?.isRunning != true else { sendReply(false); return }
             let command = Process()
             command.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
             command.arguments = [onAC ? "-c" : "-b", "powermode", String(mode)]
             command.environment = ["PATH": "/usr/bin:/bin"]
             command.standardOutput = FileHandle.nullDevice
             command.standardError = FileHandle.nullDevice
+            let finished = DispatchSemaphore(value: 0)
+            command.terminationHandler = { completed in
+                finished.signal()
+                self.work.async {
+                    if self.activeCommand === completed { self.activeCommand = nil }
+                }
+            }
             do {
                 try command.run()
-                command.waitUntilExit()
+                self.activeCommand = command
+                if finished.wait(timeout: .now() + .seconds(5)) == .timedOut {
+                    if command.isRunning { command.terminate() }
+                    _ = finished.wait(timeout: .now() + .seconds(1))
+                    self.extendLifetime()
+                    sendReply(false)
+                    return
+                }
                 self.extendLifetime()
                 sendReply(command.terminationReason == .exit && command.terminationStatus == 0)
             } catch {

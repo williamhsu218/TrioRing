@@ -63,4 +63,21 @@ struct IconSettingsTests {
         #expect(StatusIconGeometry.splitFillProgress(0.51, topGapWidth: gap) > 0.51)
         #expect(StatusIconGeometry.splitFillProgress(0.8, topGapWidth: 0) == 0.8)
     }
+
+    @Test func inkOffsetCacheScalesAcrossSizesWithoutGrowingPerSize() {
+        StatusIcon.resetInkOffsetCache()
+        let battery = BatteryStatus.battery(.init(percent: 75, pluggedIn: false))
+        let network = NetworkStatus(path: .wifi, signalDBm: -60)
+        let audio = AudioStatus(volume: 0.5)
+
+        for middleSize in [100, 120, 140, 160, 180] {
+            var preferences = IconPreferences()
+            preferences.middleSource = .network
+            preferences.middleSize = middleSize
+            let icon = StatusIcon(battery: battery, network: network, audio: audio, preferences: preferences)
+            #expect(icon.image(layer: .template) != nil)
+        }
+
+        #expect(StatusIcon.cachedInkOffsetCount == 1)
+    }
 }
