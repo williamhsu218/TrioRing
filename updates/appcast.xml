@@ -6,17 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/williamhsu218/TrioRing/releases</link>
     <description>Updates for TrioRing on macOS.</description>
     <item>
-      <title>TrioRing 0.7.37</title>
-      <link>https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.37</link>
+      <title>TrioRing 0.7.38</title>
+      <link>https://github.com/williamhsu218/TrioRing/releases/tag/v0.7.38</link>
       <description>See the GitHub release for what's new.</description>
-      <pubDate>Thu, 19 Nov 2026 07:57:51 +0000</pubDate>
-      <sparkle:version>49</sparkle:version>
-      <sparkle:shortVersionString>0.7.37</sparkle:shortVersionString>
+      <pubDate>Sat, 28 Nov 2026 09:06:11 +0000</pubDate>
+      <sparkle:version>50</sparkle:version>
+      <sparkle:shortVersionString>0.7.38</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/williamhsu218/TrioRing/releases/download/v0.7.37/TrioRing-0.7.37-arm64.dmg" length="3263048" type="application/octet-stream" sparkle:edSignature="br66GJ79pcwN5oe4LJRYyEnKHnxypC5KrW76VabNJHE2+f2ZTAdYQZPUJe58CEfHrspl6gpxGQR+ZxXSeVAEBw=="></enclosure>
+      <enclosure url="https://github.com/williamhsu218/TrioRing/releases/download/v0.7.38/TrioRing-0.7.38-arm64.dmg" length="3307896" type="application/octet-stream" sparkle:edSignature="qEdKFkk8sClZcyj6l9D/6d7QedYSSszsu5gkddSfdp1cOoR4UCPn214IoQi9SvPrYE1DFSQ+GCw0gAYOBjBvAg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: WXDVqrp7+WhcJZKVlZTpfqSgkJKtVDRfx1tT9ItK3gywmDrFjY99GbYcfOJnINvA/mEE3Ewo9KsyfmROPt1RCQ==
+edSignature: cc1rUq8BR6Sa3A2J2eErXTrWp4Arm09o+TYEKmZW3lcJkmCNpZXIn3IRcxZiQvdgpPRkGEanz49u/qIPsROnBQ==
 length: 1323
 -->
