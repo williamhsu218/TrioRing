@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint property lists and entitlements
+        run: |
+          plutil -lint Resources/Info.plist Resources/TrioRing.entitlements Resources/com.willhsu.ring-a-bar.PowerMode.plist
+
+      - name: Build release binaries
+        run: |
+          swift build -c release --product TrioRing
+          swift build -c release --product TrioRingPowerHelper
+
+      - name: Run unit tests
+        run: swift test
